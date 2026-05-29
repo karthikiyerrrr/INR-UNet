@@ -22,6 +22,8 @@ dist/
 
 # Notebooks (commit only the boilerplate via `git add -f`)
 *.ipynb
+# marimo per-notebook session cache (committed notebooks are the .py files themselves)
+__marimo__/
 
 # Data & run artifacts (keep the directories)
 data/*
