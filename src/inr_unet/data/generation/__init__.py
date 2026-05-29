@@ -5,6 +5,7 @@ from inr_unet.data.generation import psf  # noqa: F401
 from inr_unet.data.generation import potential  # noqa: F401
 from inr_unet.data.generation import background  # noqa: F401
 from inr_unet.data.generation import noise  # noqa: F401
+from inr_unet.data.generation import labels  # noqa: F401
 from inr_unet.data.generation.structures import (
     IMAGING_CONDITIONS,
     BackgroundSpec,
