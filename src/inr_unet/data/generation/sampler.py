@@ -15,6 +15,7 @@ from inr_unet.data.generation.structures import (
     BackgroundSpec,
     ImagingCondition,
     NoiseSpec,
+    RenderParams,
 )
 
 if TYPE_CHECKING:
@@ -137,3 +138,30 @@ class AugmentationSampler:
         ox = float(rng.uniform(-j, j)) if j > 0 else 0.0
         oy = float(rng.uniform(-j, j)) if j > 0 else 0.0
         return torch.tensor([ox, oy], dtype=torch.float32)
+
+    def sample(self, index: int, max_fov_A: float) -> tuple[ImagingCondition, RenderParams]:
+        """Draw a renderable (ImagingCondition, RenderParams) for the given draw index.
+
+        Raises ValueError if no FOV/rotation fits ``max_fov_A`` with margin.
+        """
+        rng, render_seed = self._streams(index)
+        condition = self._draw_condition(rng)
+        rotation_deg = self._draw_rotation(rng, max_fov_A)
+        fov_A, pixel_size_A, output_size = self._draw_scale(
+            rng, condition, rotation_deg, max_fov_A
+        )
+        background = self._draw_background(rng)
+        noise = self._draw_noise(rng)
+        offset = self._draw_offset(rng, fov_A, rotation_deg, max_fov_A)
+        params = RenderParams(
+            output_size=output_size,
+            pixel_size_A=pixel_size_A,
+            rotation_deg=rotation_deg,
+            position_offset_A=offset,
+            z_exponent=float(self.cfg.z_exponent),
+            background=background,
+            noise=noise,
+            seed=render_seed,
+            device=self.cfg.device,
+        )
+        return condition, params

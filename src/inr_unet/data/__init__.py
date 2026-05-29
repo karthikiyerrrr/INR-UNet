@@ -3,6 +3,7 @@
 from inr_unet.data.dataset import LIIFSegDataset, STEMSegDataset
 from inr_unet.data.generation import (
     IMAGING_CONDITIONS,
+    AugmentationSampler,
     ColumnList,
     ImagingCondition,
     RenderOutput,
@@ -14,6 +15,7 @@ from inr_unet.data.transforms import Normalize
 __all__ = [
     "STEMSegDataset",
     "LIIFSegDataset",
+    "AugmentationSampler",
     "TEMRenderer",
     "ColumnList",
     "ImagingCondition",

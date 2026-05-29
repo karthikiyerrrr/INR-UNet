@@ -3,16 +3,20 @@
 import math
 
 import pytest
+import torch
 from omegaconf import OmegaConf
 
 from inr_unet.config import SamplerConfig
 from inr_unet.data.generation.psf import build_psf
+from inr_unet.data.generation.renderer import TEMRenderer
 from inr_unet.data.generation.sampler import AugmentationSampler
 from inr_unet.data.generation.structures import (
     IMAGING_CONDITIONS,
+    ColumnList,
     Grid,
     ImagingCondition,
     NoiseSpec,
+    RenderParams,
 )
 
 
@@ -137,3 +141,62 @@ def test_draw_scale_raises_when_aliasing_below_min_pixel():
     rng, _ = s._streams(0)
     with pytest.raises(ValueError):
         s._draw_scale(rng, IMAGING_CONDITIONS["cond1"], 0.0, 80.0)
+
+
+def _renderer():
+    cfg = OmegaConf.create(
+        {"potential_backend": "z_power", "sigma_potential_A": 0.4, "aperture_soft": True}
+    )
+    return TEMRenderer(cfg)
+
+
+def test_sample_returns_condition_and_params():
+    s = _sampler()
+    cond, params = s.sample(0, max_fov_A=80.0)
+    assert isinstance(cond, ImagingCondition)
+    assert isinstance(params, RenderParams)
+    assert params.z_exponent == 1.7  # held fixed from config
+    assert params.position_offset_A.shape == (2,)
+
+
+def test_sample_deterministic_by_index():
+    s = _sampler()
+    c1, p1 = s.sample(5, 80.0)
+    c2, p2 = s.sample(5, 80.0)
+    assert c1.name == c2.name
+    assert (p1.seed, p1.output_size, p1.pixel_size_A, p1.rotation_deg) == (
+        p2.seed, p2.output_size, p2.pixel_size_A, p2.rotation_deg
+    )
+    assert torch.allclose(p1.position_offset_A, p2.position_offset_A)
+    # distinct indices generally differ
+    assert len({s.sample(i, 80.0)[1].seed for i in range(20)}) > 1
+
+
+def test_sample_distribution_sane():
+    s = _sampler()
+    rots, npeaks, kinds = set(), [], []
+    for i in range(300):
+        _, p = s.sample(i, 80.0)
+        rots.add(p.rotation_deg)
+        npeaks.append(p.noise.n_peak)
+        kinds.append(p.background.kind)
+        assert 0.05 <= p.pixel_size_A <= 0.30
+    assert rots <= {0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0}
+    assert all(30.0 <= n <= 3000.0 for n in npeaks)
+    assert set(kinds) == {"constant", "linear_ramp", "nonlinear"}
+
+
+def test_sampler_output_renders():
+    s = _sampler()
+    r = _renderer()
+    xs = torch.arange(0.5, 30.0, 0.5)
+    pts = torch.stack(torch.meshgrid(xs, xs, indexing="ij"), dim=-1).reshape(-1, 2)
+    n = pts.shape[0]
+    cols = ColumnList(
+        positions_A=pts, z=torch.full((n,), 78.0), count=torch.ones(n), fov_A=30.0
+    )
+    for i in range(10):
+        cond, params = s.sample(i, max_fov_A=30.0)
+        out = r.render(cols, cond, params)
+        assert out.image.shape == (params.output_size, params.output_size)
+        assert torch.isfinite(out.image).all()

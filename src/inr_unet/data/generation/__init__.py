@@ -8,6 +8,7 @@ from inr_unet.data.generation import (
     psf,  # noqa: F401
 )
 from inr_unet.data.generation.renderer import TEMRenderer
+from inr_unet.data.generation.sampler import AugmentationSampler
 from inr_unet.data.generation.structures import (
     IMAGING_CONDITIONS,
     BackgroundSpec,
@@ -21,6 +22,7 @@ from inr_unet.data.generation.structures import (
 )
 
 __all__ = [
+    "AugmentationSampler",
     "TEMRenderer",
     "IMAGING_CONDITIONS",
     "BackgroundSpec",
