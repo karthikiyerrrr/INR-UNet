@@ -6,7 +6,10 @@ import math
 from typing import TYPE_CHECKING
 
 import numpy as np
+import torch
 
+from inr_unet.data.generation.psf import wavelength_A
+from inr_unet.data.generation.renderer import _MARGIN_A
 from inr_unet.data.generation.structures import (
     IMAGING_CONDITIONS,
     BackgroundSpec,
@@ -77,3 +80,54 @@ class AugmentationSampler:
         else:
             raise ValueError(f"unknown background kind {kind!r}")
         return BackgroundSpec(kind=kind, params=params)
+
+    def _rotation_choices(self) -> list[float]:
+        n = int(self.cfg.rotation_max_deg // self.cfg.rotation_step_deg)
+        return [i * self.cfg.rotation_step_deg for i in range(n + 1)]
+
+    def _fov_fits(self, fov_A: float, rotation_deg: float, max_fov_A: float) -> bool:
+        return fov_A * _rot_factor(rotation_deg) + 2.0 * _MARGIN_A <= max_fov_A
+
+    def _draw_rotation(self, rng: np.random.Generator, max_fov_A: float) -> float:
+        smallest_fov = min(self.cfg.fov_set_A)
+        feasible = [r for r in self._rotation_choices()
+                    if self._fov_fits(smallest_fov, r, max_fov_A)]
+        if not feasible:
+            raise ValueError(
+                f"max_fov_A={max_fov_A} too small for smallest FOV {smallest_fov} A "
+                f"with margin {_MARGIN_A} A"
+            )
+        return float(feasible[int(rng.integers(len(feasible)))])
+
+    def _draw_scale(
+        self,
+        rng: np.random.Generator,
+        condition: ImagingCondition,
+        rotation_deg: float,
+        max_fov_A: float,
+    ) -> tuple[float, float, int]:
+        lam = wavelength_A(condition.energy_keV)
+        k_cut = (condition.alpha_max_mrad * 1e-3) / lam
+        px_alias = 1.0 / (3.0 * k_cut)  # 2/3-Nyquist guard
+        px_max = max(min(self.cfg.pixel_size_A_max, px_alias), self.cfg.pixel_size_A_min)
+        pixel_size_A = float(np.exp(rng.uniform(math.log(self.cfg.pixel_size_A_min),
+                                                math.log(px_max))))
+        candidates = [float(f) for f in self.cfg.fov_set_A
+                      if self._fov_fits(float(f), rotation_deg, max_fov_A)]
+        if not candidates:
+            raise ValueError(
+                f"no FOV in {list(self.cfg.fov_set_A)} fits max_fov_A={max_fov_A} "
+                f"at rotation {rotation_deg} deg"
+            )
+        fov_A = candidates[int(rng.integers(len(candidates)))]
+        output_size = int(fov_A / pixel_size_A)  # floor: rendered FOV <= sampled FOV
+        return fov_A, pixel_size_A, output_size
+
+    def _draw_offset(
+        self, rng: np.random.Generator, fov_A: float, rotation_deg: float, max_fov_A: float
+    ) -> torch.Tensor:
+        slack = max((max_fov_A - fov_A * _rot_factor(rotation_deg)) / 2.0 - _MARGIN_A, 0.0)
+        j = self.cfg.offset_jitter_frac * slack
+        ox = float(rng.uniform(-j, j)) if j > 0 else 0.0
+        oy = float(rng.uniform(-j, j)) if j > 0 else 0.0
+        return torch.tensor([ox, oy], dtype=torch.float32)

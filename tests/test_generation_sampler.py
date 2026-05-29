@@ -2,11 +2,18 @@
 
 import math
 
+import pytest
 from omegaconf import OmegaConf
 
 from inr_unet.config import SamplerConfig
+from inr_unet.data.generation.psf import build_psf
 from inr_unet.data.generation.sampler import AugmentationSampler
-from inr_unet.data.generation.structures import ImagingCondition, NoiseSpec
+from inr_unet.data.generation.structures import (
+    IMAGING_CONDITIONS,
+    Grid,
+    ImagingCondition,
+    NoiseSpec,
+)
 
 
 def _sampler(master_seed=123):
@@ -67,3 +74,47 @@ def test_draw_background_families_and_params():
         elif bg.kind == "nonlinear":
             assert 2 <= bg.params["n_blobs"] <= 5
     assert seen == {"constant", "linear_ramp", "nonlinear"}
+
+
+def test_rotation_choices_filtered_to_feasible():
+    s = _sampler()
+    rng, _ = s._streams(0)
+    # max_fov 30 with smallest fov 8: 8*(|cos|+|sin|) + 12 <= 30 -> factor <= 2.25.
+    # All rotations 0..90 satisfy this (max factor ~1.414), so all are allowed.
+    rots = {s._draw_rotation(rng, 30.0) for _ in range(200)}
+    assert rots <= {0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0}
+    assert 0.0 in rots
+
+
+def test_too_small_structure_raises():
+    s = _sampler()
+    rng, _ = s._streams(0)
+    # smallest fov 8: even at 0 deg, 8*1 + 12 = 20 > 10 -> no feasible rotation.
+    with pytest.raises(ValueError):
+        s._draw_rotation(rng, 10.0)
+
+
+def test_draw_scale_respects_aliasing_and_fov():
+    s = _sampler()
+    rng, _ = s._streams(0)
+    cond = IMAGING_CONDITIONS["cond1"]
+    for _ in range(100):
+        fov_A, pixel_size_A, output_size = s._draw_scale(rng, cond, 0.0, 80.0)
+        assert fov_A in [8.0, 10.0, 20.0, 30.0, 40.0]
+        assert 0.05 <= pixel_size_A <= 0.30
+        # rendered FOV never exceeds sampled FOV (floor), and aliasing guard holds
+        assert output_size * pixel_size_A <= fov_A + 1e-9
+        build_psf(cond, Grid(output_size, pixel_size_A))  # raises if k_cut >= k_Nyq
+
+
+def test_draw_offset_within_slack():
+    s = _sampler()
+    rng, _ = s._streams(0)
+    fov_A, rotation_deg, max_fov_A = 10.0, 30.0, 40.0
+    factor = abs(math.cos(math.radians(rotation_deg))) + abs(math.sin(math.radians(rotation_deg)))
+    slack = max((max_fov_A - fov_A * factor) / 2.0 - 6.0, 0.0)
+    bound = 0.5 * slack  # offset_jitter_frac default 0.5
+    for _ in range(100):
+        off = s._draw_offset(rng, fov_A, rotation_deg, max_fov_A)
+        assert off.shape == (2,)
+        assert float(off.abs().max()) <= bound + 1e-6
