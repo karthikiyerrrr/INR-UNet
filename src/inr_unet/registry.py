@@ -45,6 +45,8 @@ BLOCKS = Registry("blocks")
 ENCODERS = Registry("encoders")
 DECODERS = Registry("decoders")
 MODELS = Registry("models")
+POTENTIALS = Registry("potentials")
+BACKGROUNDS = Registry("backgrounds")
 
 
 def build_model(cfg: DictConfig) -> nn.Module:
