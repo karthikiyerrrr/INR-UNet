@@ -92,3 +92,28 @@ def test_empty_columns_renders_background_only():
     )
     assert out.no_background_no_noise.abs().sum() == 0.0
     assert out.image.shape == (32, 32)
+
+
+def test_render_centers_window_in_larger_structure():
+    # Structure confined to the center band [7, 13] of a 20 A box.
+    # With the old corner-pivot the rotated render window misses the structure entirely
+    # (gmax==0); with the structure-center pivot the window lands on the structure.
+    r = _renderer()
+    xs = torch.arange(7.0, 13.5, 0.5)
+    pts = torch.stack(torch.meshgrid(xs, xs, indexing="ij"), dim=-1).reshape(-1, 2)
+    n = pts.shape[0]
+    cols = ColumnList(
+        positions_A=pts, z=torch.full((n,), 78.0), count=torch.ones(n), fov_A=20.0
+    )
+    # render FOV = 64 * 0.1 = 6.4 A, rotated 45 deg, centered in the 20 A structure
+    p = RenderParams(output_size=64, pixel_size_A=0.1, rotation_deg=45.0, seed=0)
+    out = r.render(cols, IMAGING_CONDITIONS["cond1"], p)
+    clean = out.no_background_no_noise
+    gmax = float(clean.max())
+    # window must land on the structure (not in empty space)
+    assert gmax > 0.0
+    h = clean.shape[0] // 2
+    quadrants = [clean[:h, :h], clean[:h, h:], clean[h:, :h], clean[h:, h:]]
+    # every quadrant is covered by structure -> no spurious vacuum wedge from rotation
+    for q in quadrants:
+        assert float(q.max()) > 0.2 * gmax

@@ -25,20 +25,24 @@ _MARGIN_A = 6.0  # covers PSF tails + splat support for columns just outside the
 
 
 def _transform_columns(columns: ColumnList, params: RenderParams) -> ColumnList:
-    """Rotate about the FOV center, translate, and crop to the FOV plus a margin."""
+    """Rotate about the structure center, translate, and crop to the FOV plus a margin.
+
+    The render window (size = grid extent) is centered in the structure, so
+    ``position_offset_A`` is a pure jitter translation.
+    """
     fov = params.output_size * params.pixel_size_A
     device = params.device
     pos = columns.positions_A.to(device)
     if pos.shape[0] == 0:
         return ColumnList(pos, columns.z.to(device), columns.count.to(device), fov)
-    center = fov / 2.0
+    struct_center = columns.fov_A / 2.0
     theta = math.radians(params.rotation_deg)
     rot = torch.tensor(
         [[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]],
         device=device,
         dtype=pos.dtype,
     )
-    moved = (pos - center) @ rot.T + center + params.position_offset_A.to(device)
+    moved = (pos - struct_center) @ rot.T + (fov / 2.0) + params.position_offset_A.to(device)
     keep = (
         (moved[:, 0] >= -_MARGIN_A)
         & (moved[:, 0] <= fov + _MARGIN_A)
