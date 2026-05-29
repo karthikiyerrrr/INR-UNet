@@ -31,9 +31,12 @@ def test_seed_streams_deterministic_and_distinct():
 def test_draw_condition_is_a_preset():
     s = _sampler()
     rng, _ = s._streams(0)
-    cond = s._draw_condition(rng)
-    assert isinstance(cond, ImagingCondition)
-    assert cond.name in {"cond1", "cond2", "cond3", "cond4", "cond5"}
+    seen = set()
+    for _ in range(100):
+        cond = s._draw_condition(rng)
+        assert isinstance(cond, ImagingCondition)
+        seen.add(cond.name)
+    assert seen == {"cond1", "cond2", "cond3", "cond4", "cond5"}
 
 
 def test_draw_noise_within_ranges():

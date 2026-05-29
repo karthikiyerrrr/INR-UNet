@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
     from inr_unet.config import SamplerConfig
 
+__all__ = ["AugmentationSampler"]
+
 
 def _rot_factor(rotation_deg: float) -> float:
     """|cos theta| + |sin theta| -- the side-growth factor of a rotated square."""
@@ -32,6 +34,9 @@ class AugmentationSampler:
     def __init__(self, cfg: SamplerConfig | DictConfig, master_seed: int) -> None:
         self.cfg = cfg
         self.master_seed = int(master_seed)
+        self._bg_kinds = list(cfg.bg_weights.keys())
+        w = np.array([float(cfg.bg_weights[k]) for k in self._bg_kinds])
+        self._bg_weights = w / w.sum()
 
     def _streams(self, index: int) -> tuple[np.random.Generator, int]:
         """Derive a distribution RNG and a decorrelated render seed for one draw."""
@@ -57,10 +62,7 @@ class AugmentationSampler:
         )
 
     def _draw_background(self, rng: np.random.Generator) -> BackgroundSpec:
-        kinds = list(self.cfg.bg_weights.keys())
-        weights = np.array([float(self.cfg.bg_weights[k]) for k in kinds])
-        weights = weights / weights.sum()
-        kind = kinds[int(rng.choice(len(kinds), p=weights))]
+        kind = self._bg_kinds[int(rng.choice(len(self._bg_kinds), p=self._bg_weights))]
         if kind == "constant":
             params = {"c": float(rng.uniform(self.cfg.bg_constant_c_min,
                                              self.cfg.bg_constant_c_max))}
