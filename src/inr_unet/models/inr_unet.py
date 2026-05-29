@@ -41,4 +41,5 @@ class BaselineUNet(nn.Module):
         self.encoder = UNetEncoder(cfg.encoder)
 
     def forward(self, img: torch.Tensor) -> torch.Tensor:
+        """Segment ``img`` [B, C, H, W] into logits [B, n_classes, H, W] at the input resolution."""
         raise NotImplementedError("BaselineUNet.forward is not implemented yet.")

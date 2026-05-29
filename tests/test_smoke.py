@@ -1,6 +1,7 @@
 """Smoke and interface-contract tests for the inr_unet package skeleton."""
 
 import importlib
+from pathlib import Path
 
 import pytest
 import torch
@@ -9,7 +10,7 @@ from inr_unet.config import load_config
 from inr_unet.models import INRUNet
 from inr_unet.registry import MODELS, build_model
 
-CONFIG_PATH = "configs/default.yaml"
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
 
 MODULES = [
     "inr_unet",
