@@ -7,4 +7,19 @@ try:
 except PackageNotFoundError:  # package not installed (e.g. source checkout without install)
     __version__ = "0.0.0"
 
-__all__ = ["__version__"]
+from inr_unet import config, losses, metrics, registry  # noqa: F401
+from inr_unet.config import load_config
+from inr_unet.models import BaselineUNet, INRUNet  # noqa: F401  (triggers registration)
+from inr_unet.registry import build_model
+
+__all__ = [
+    "__version__",
+    "config",
+    "registry",
+    "losses",
+    "metrics",
+    "load_config",
+    "build_model",
+    "INRUNet",
+    "BaselineUNet",
+]

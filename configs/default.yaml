@@ -1,0 +1,26 @@
+# Example experiment configuration. Mirrors inr_unet.config.ExperimentConfig.
+model:
+  name: inr_unet
+  encoder:
+    name: unet
+    in_channels: 1
+    base_channels: 64
+    depth: 4
+    feature_dim: 64
+  decoder:
+    name: liif
+    hidden_dim: 256
+    num_layers: 5
+    n_classes: 1
+    local_ensemble: true
+    feature_unfold: true
+    cell_decode: true
+data:
+  root: data
+  image_size: 256
+  batch_size: 8
+  num_workers: 4
+train:
+  epochs: 100
+  lr: 1.0e-4
+  seed: 0
