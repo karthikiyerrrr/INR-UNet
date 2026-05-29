@@ -72,10 +72,12 @@ def test_renderparams_defaults():
     assert p.position_offset_A.shape == (2,)
 
 
-def test_renderer_skeleton_imports_but_render_unimplemented():
+def test_renderer_is_implemented():
     from omegaconf import OmegaConf
+
+    from inr_unet.data.generation.structures import RenderOutput
 
     cfg = OmegaConf.create({"potential_backend": "z_power", "sigma_potential_A": 0.4, "aperture_soft": True})
     r = TEMRenderer(cfg)
-    with pytest.raises(NotImplementedError):
-        r.render(_columns(), IMAGING_CONDITIONS["cond1"], RenderParams(output_size=16, pixel_size_A=0.2))
+    out = r.render(_columns(), IMAGING_CONDITIONS["cond1"], RenderParams(output_size=64, pixel_size_A=0.4, seed=0))
+    assert isinstance(out, RenderOutput)
