@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from inr_unet.data.generation.psf import wavelength_A
-from inr_unet.data.generation.renderer import _MARGIN_A
+from inr_unet.data.generation.renderer import _MARGIN_A  # keep in sync with renderer crop margin
 from inr_unet.data.generation.structures import (
     IMAGING_CONDITIONS,
     BackgroundSpec,
@@ -82,7 +82,7 @@ class AugmentationSampler:
         return BackgroundSpec(kind=kind, params=params)
 
     def _rotation_choices(self) -> list[float]:
-        n = int(self.cfg.rotation_max_deg // self.cfg.rotation_step_deg)
+        n = round(self.cfg.rotation_max_deg / self.cfg.rotation_step_deg)
         return [i * self.cfg.rotation_step_deg for i in range(n + 1)]
 
     def _fov_fits(self, fov_A: float, rotation_deg: float, max_fov_A: float) -> bool:
@@ -109,6 +109,12 @@ class AugmentationSampler:
         lam = wavelength_A(condition.energy_keV)
         k_cut = (condition.alpha_max_mrad * 1e-3) / lam
         px_alias = 1.0 / (3.0 * k_cut)  # 2/3-Nyquist guard
+        if px_alias < self.cfg.pixel_size_A_min:
+            raise ValueError(
+                f"aliasing limit {px_alias:.4f} A < pixel_size_A_min "
+                f"{self.cfg.pixel_size_A_min} A for condition {condition.name!r}; "
+                f"reduce alpha_max_mrad or raise pixel_size_A_min"
+            )
         px_max = max(min(self.cfg.pixel_size_A_max, px_alias), self.cfg.pixel_size_A_min)
         pixel_size_A = float(np.exp(rng.uniform(math.log(self.cfg.pixel_size_A_min),
                                                 math.log(px_max))))

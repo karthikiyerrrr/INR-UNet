@@ -100,7 +100,7 @@ def test_draw_scale_respects_aliasing_and_fov():
     cond = IMAGING_CONDITIONS["cond1"]
     for _ in range(100):
         fov_A, pixel_size_A, output_size = s._draw_scale(rng, cond, 0.0, 80.0)
-        assert fov_A in [8.0, 10.0, 20.0, 30.0, 40.0]
+        assert fov_A in list(s.cfg.fov_set_A)
         assert 0.05 <= pixel_size_A <= 0.30
         # rendered FOV never exceeds sampled FOV (floor), and aliasing guard holds
         assert output_size * pixel_size_A <= fov_A + 1e-9
@@ -118,3 +118,22 @@ def test_draw_offset_within_slack():
         off = s._draw_offset(rng, fov_A, rotation_deg, max_fov_A)
         assert off.shape == (2,)
         assert float(off.abs().max()) <= bound + 1e-6
+
+
+def test_draw_scale_raises_when_no_fov_fits():
+    s = _sampler()
+    rng, _ = s._streams(0)
+    cond = IMAGING_CONDITIONS["cond1"]
+    # at 0 deg even the smallest FOV (8) needs 8 + 2*6 = 20 A > 11 -> no candidate
+    with pytest.raises(ValueError):
+        s._draw_scale(rng, cond, 0.0, 11.0)
+
+
+def test_draw_scale_raises_when_aliasing_below_min_pixel():
+    cfg = OmegaConf.structured(SamplerConfig)
+    cfg.pixel_size_A_min = 0.5  # coarser than any condition's aliasing limit (~0.35 A)
+    cfg.pixel_size_A_max = 0.6
+    s = AugmentationSampler(cfg, master_seed=0)
+    rng, _ = s._streams(0)
+    with pytest.raises(ValueError):
+        s._draw_scale(rng, IMAGING_CONDITIONS["cond1"], 0.0, 80.0)
