@@ -78,6 +78,7 @@ class ImagingCondition:
 IMAGING_CONDITIONS: dict[str, ImagingCondition] = {
     "cond1": ImagingCondition(200.0, 24.0, 0.9, name="cond1"),
     "cond2": ImagingCondition(100.0, 30.0, 0.8, name="cond2"),
+    # cond3 and cond4 share identical listed parameters in the source paper's Table 1.
     "cond3": ImagingCondition(200.0, 10.5, 0.9, name="cond3"),
     "cond4": ImagingCondition(200.0, 10.5, 0.9, name="cond4"),
     "cond5": ImagingCondition(200.0, 10.0, 1.6, name="cond5"),
@@ -134,7 +135,7 @@ class RenderOutput:
     image: torch.Tensor                   # [H, W] noisy, normalized
     gaussian_mask: torch.Tensor           # [H, W] equalized seg target
     circular_mask: torch.Tensor           # [H, W] binary disks
-    no_noise: torch.Tensor                # [H, W] background, no noise
+    no_noise: torch.Tensor                # [H, W] signal + background, no noise
     no_background_no_noise: torch.Tensor  # [H, W] clean sigma (x) PSF
     positions_A: torch.Tensor             # [M, 2] transformed/cropped centers (A)
     radii_A: torch.Tensor                 # [M] per-column radius (A)

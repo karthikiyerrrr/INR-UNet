@@ -11,7 +11,6 @@ def test_generation_defaults():
     cfg = GenerationConfig()
     assert cfg.potential_backend == "z_power"
     assert cfg.sigma_potential_A == 0.4
-    assert cfg.z_exponent == 1.7
     assert cfg.aperture_soft is True
 
 

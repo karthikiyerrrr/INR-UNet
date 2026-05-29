@@ -39,7 +39,9 @@ def apply_scan_noise(
     return out[0, 0]
 
 
-def apply_poisson(image: torch.Tensor, noise: NoiseSpec, generator: torch.Generator) -> torch.Tensor:
+def apply_poisson(
+    image: torch.Tensor, noise: NoiseSpec, generator: torch.Generator
+) -> torch.Tensor:
     """Dose-dependent shot noise; returns counts renormalized by n_peak."""
     img = image - image.min()
     mx = img.max()

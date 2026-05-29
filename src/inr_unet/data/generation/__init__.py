@@ -1,11 +1,13 @@
 """Forward-model (TEMImageNet-style) renderer and its stage modules."""
 
+from inr_unet.data.generation import (
+    background,  # noqa: F401
+    labels,  # noqa: F401
+    noise,  # noqa: F401
+    potential,  # noqa: F401
+    psf,  # noqa: F401
+)
 from inr_unet.data.generation.renderer import TEMRenderer
-from inr_unet.data.generation import psf  # noqa: F401
-from inr_unet.data.generation import potential  # noqa: F401
-from inr_unet.data.generation import background  # noqa: F401
-from inr_unet.data.generation import noise  # noqa: F401
-from inr_unet.data.generation import labels  # noqa: F401
 from inr_unet.data.generation.structures import (
     IMAGING_CONDITIONS,
     BackgroundSpec,

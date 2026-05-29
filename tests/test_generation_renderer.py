@@ -49,8 +49,12 @@ def test_render_deterministic_given_seed():
 def test_render_seed_changes_noise():
     r = _renderer()
     base = _lattice()
-    a = r.render(base, IMAGING_CONDITIONS["cond1"], RenderParams(output_size=48, pixel_size_A=0.2, seed=1))
-    b = r.render(base, IMAGING_CONDITIONS["cond1"], RenderParams(output_size=48, pixel_size_A=0.2, seed=2))
+    a = r.render(
+        base, IMAGING_CONDITIONS["cond1"], RenderParams(output_size=48, pixel_size_A=0.2, seed=1)
+    )
+    b = r.render(
+        base, IMAGING_CONDITIONS["cond1"], RenderParams(output_size=48, pixel_size_A=0.2, seed=2)
+    )
     assert not torch.allclose(a.image, b.image)
 
 
@@ -83,6 +87,8 @@ def test_empty_columns_renders_background_only():
     empty = ColumnList(
         positions_A=torch.zeros(0, 2), z=torch.zeros(0), count=torch.zeros(0), fov_A=12.8
     )
-    out = r.render(empty, IMAGING_CONDITIONS["cond1"], RenderParams(output_size=32, pixel_size_A=0.4, seed=0))
+    out = r.render(
+        empty, IMAGING_CONDITIONS["cond1"], RenderParams(output_size=32, pixel_size_A=0.4, seed=0)
+    )
     assert out.no_background_no_noise.abs().sum() == 0.0
     assert out.image.shape == (32, 32)

@@ -77,7 +77,13 @@ def test_renderer_is_implemented():
 
     from inr_unet.data.generation.structures import RenderOutput
 
-    cfg = OmegaConf.create({"potential_backend": "z_power", "sigma_potential_A": 0.4, "aperture_soft": True})
+    cfg = OmegaConf.create(
+        {"potential_backend": "z_power", "sigma_potential_A": 0.4, "aperture_soft": True}
+    )
     r = TEMRenderer(cfg)
-    out = r.render(_columns(), IMAGING_CONDITIONS["cond1"], RenderParams(output_size=64, pixel_size_A=0.4, seed=0))
+    out = r.render(
+        _columns(),
+        IMAGING_CONDITIONS["cond1"],
+        RenderParams(output_size=64, pixel_size_A=0.4, seed=0),
+    )
     assert isinstance(out, RenderOutput)

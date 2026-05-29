@@ -54,7 +54,6 @@ class TrainConfig:
 class GenerationConfig:
     potential_backend: str = "z_power"
     sigma_potential_A: float = 0.4
-    z_exponent: float = 1.7
     aperture_soft: bool = True
 
 

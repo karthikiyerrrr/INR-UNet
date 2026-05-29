@@ -15,13 +15,17 @@ def _rand(generator: torch.Generator, device: str) -> torch.Tensor:
 
 
 @BACKGROUNDS.register("constant")
-def constant_bg(grid: Grid, params: dict, signal_scale: float, generator: torch.Generator) -> torch.Tensor:
+def constant_bg(
+    grid: Grid, params: dict, signal_scale: float, generator: torch.Generator
+) -> torch.Tensor:
     c = float(params.get("c", 0.2))
     return torch.full((grid.output_size, grid.output_size), c * signal_scale, device=grid.device)
 
 
 @BACKGROUNDS.register("linear_ramp")
-def linear_ramp(grid: Grid, params: dict, signal_scale: float, generator: torch.Generator) -> torch.Tensor:
+def linear_ramp(
+    grid: Grid, params: dict, signal_scale: float, generator: torch.Generator
+) -> torch.Tensor:
     c0 = float(params.get("c0", 0.15))
     g = float(params.get("g", 0.3))
     theta = _rand(generator, grid.device) * 2.0 * math.pi
@@ -31,7 +35,9 @@ def linear_ramp(grid: Grid, params: dict, signal_scale: float, generator: torch.
 
 
 @BACKGROUNDS.register("nonlinear")
-def nonlinear_bg(grid: Grid, params: dict, signal_scale: float, generator: torch.Generator) -> torch.Tensor:
+def nonlinear_bg(
+    grid: Grid, params: dict, signal_scale: float, generator: torch.Generator
+) -> torch.Tensor:
     n_blobs = int(params.get("n_blobs", 3))
     yy, xx = grid.normalized_coords()
     bg = torch.zeros_like(xx)
