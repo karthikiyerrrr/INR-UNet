@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 import torch.nn as nn
 from omegaconf import DictConfig
