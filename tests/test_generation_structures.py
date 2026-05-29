@@ -1,7 +1,5 @@
 """Data contracts for the forward model: dataclasses, presets, Grid, validation."""
 
-import math
-
 import pytest
 import torch
 
@@ -11,7 +9,6 @@ from inr_unet.data.generation.structures import (
     BackgroundSpec,
     ColumnList,
     Grid,
-    ImagingCondition,
     NoiseSpec,
     RenderParams,
 )
@@ -78,9 +75,6 @@ def test_renderparams_defaults():
 def test_renderer_skeleton_imports_but_render_unimplemented():
     from omegaconf import OmegaConf
 
-    from inr_unet.config import GenerationConfig  # added in Task 3; xfail-safe below
-
-    _ = ImagingCondition  # silence unused in case of early run
     cfg = OmegaConf.create({"potential_backend": "z_power", "sigma_potential_A": 0.4, "aperture_soft": True})
     r = TEMRenderer(cfg)
     with pytest.raises(NotImplementedError):

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 
 import torch
@@ -121,6 +120,8 @@ class RenderParams:
 
 @dataclass(frozen=True)
 class RenderMeta:
+    """Scalar metadata attached to one render output."""
+
     pixel_size_A: float
     output_size: int
     condition_name: str
