@@ -28,3 +28,32 @@ generation:
   potential_backend: z_power
   sigma_potential_A: 0.4
   aperture_soft: true
+  sampler:
+    fov_set_A: [8.0, 10.0, 20.0, 30.0, 40.0]
+    pixel_size_A_min: 0.05
+    pixel_size_A_max: 0.30
+    rotation_step_deg: 15.0
+    rotation_max_deg: 90.0
+    offset_jitter_frac: 0.5
+    conditions: [cond1, cond2, cond3, cond4, cond5]
+    bg_weights:
+      constant: 1.0
+      linear_ramp: 1.0
+      nonlinear: 1.0
+    bg_constant_c_min: 0.05
+    bg_constant_c_max: 0.40
+    bg_ramp_c0_min: 0.05
+    bg_ramp_c0_max: 0.30
+    bg_ramp_g_min: 0.10
+    bg_ramp_g_max: 0.60
+    bg_nonlinear_blobs_min: 2
+    bg_nonlinear_blobs_max: 5
+    n_peak_min: 30.0
+    n_peak_max: 3000.0
+    n_bg_frac_max: 0.05
+    scan_freq_min: 0.02
+    scan_freq_max: 0.5
+    scan_beta_min: 0.3
+    scan_beta_max: 0.5
+    z_exponent: 1.7
+    device: cpu
