@@ -51,10 +51,19 @@ class TrainConfig:
 
 
 @dataclass
+class GenerationConfig:
+    potential_backend: str = "z_power"
+    sigma_potential_A: float = 0.4
+    z_exponent: float = 1.7
+    aperture_soft: bool = True
+
+
+@dataclass
 class ExperimentConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+    generation: GenerationConfig = field(default_factory=GenerationConfig)
 
 
 def load_config(path: str | Path) -> DictConfig:

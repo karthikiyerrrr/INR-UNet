@@ -24,3 +24,8 @@ train:
   epochs: 100
   lr: 1.0e-4
   seed: 0
+generation:
+  potential_backend: z_power
+  sigma_potential_A: 0.4
+  z_exponent: 1.7
+  aperture_soft: true
