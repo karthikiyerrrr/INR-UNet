@@ -181,7 +181,7 @@ def test_sample_distribution_sane():
         npeaks.append(p.noise.n_peak)
         kinds.append(p.background.kind)
         assert 0.05 <= p.pixel_size_A <= 0.30
-    assert rots <= {0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0}
+    assert rots == {0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0}
     assert all(30.0 <= n <= 3000.0 for n in npeaks)
     assert set(kinds) == {"constant", "linear_ramp", "nonlinear"}
 
@@ -189,14 +189,16 @@ def test_sample_distribution_sane():
 def test_sampler_output_renders():
     s = _sampler()
     r = _renderer()
-    xs = torch.arange(0.5, 30.0, 0.5)
+    # Structure fills a 60 A FOV so larger sampled render FOVs (incl. 30 A) are feasible.
+    # max_fov_A MUST equal the structure's fov_A (the sampler bounds render FOV by it).
+    xs = torch.arange(0.5, 60.0, 1.0)
     pts = torch.stack(torch.meshgrid(xs, xs, indexing="ij"), dim=-1).reshape(-1, 2)
     n = pts.shape[0]
     cols = ColumnList(
-        positions_A=pts, z=torch.full((n,), 78.0), count=torch.ones(n), fov_A=30.0
+        positions_A=pts, z=torch.full((n,), 78.0), count=torch.ones(n), fov_A=60.0
     )
     for i in range(10):
-        cond, params = s.sample(i, max_fov_A=30.0)
+        cond, params = s.sample(i, max_fov_A=60.0)
         out = r.render(cols, cond, params)
         assert out.image.shape == (params.output_size, params.output_size)
         assert torch.isfinite(out.image).all()
