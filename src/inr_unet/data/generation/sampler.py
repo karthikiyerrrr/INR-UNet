@@ -90,6 +90,7 @@ class AugmentationSampler:
         return fov_A * _rot_factor(rotation_deg) + 2.0 * _MARGIN_A <= max_fov_A
 
     def _draw_rotation(self, rng: np.random.Generator, max_fov_A: float) -> float:
+        # feasibility vs the smallest FOV guarantees _draw_scale has >=1 candidate later
         smallest_fov = min(self.cfg.fov_set_A)
         feasible = [r for r in self._rotation_choices()
                     if self._fov_fits(smallest_fov, r, max_fov_A)]
@@ -127,7 +128,7 @@ class AugmentationSampler:
                 f"at rotation {rotation_deg} deg"
             )
         fov_A = candidates[int(rng.integers(len(candidates)))]
-        output_size = int(fov_A / pixel_size_A)  # floor: rendered FOV <= sampled FOV
+        output_size = max(1, int(fov_A / pixel_size_A))  # floor; >=1 guards sub-pixel FOVs
         return fov_A, pixel_size_A, output_size
 
     def _draw_offset(
