@@ -1,0 +1,81 @@
+"""Scene sources: the ColumnListProvider interface and a synthetic-lattice provider."""
+
+from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+import numpy as np
+import torch
+
+from inr_unet.data.generation.structures import ColumnList
+
+if TYPE_CHECKING:
+    from omegaconf import DictConfig
+
+    from inr_unet.config import SyntheticDatasetConfig
+
+# Decorrelated RNG stream (length-3 SeedSequence root; see plan determinism note).
+_SCENE_SALT = 1009
+# Lattice generation ranges (internal; scene FOV is large so the sampler's FOV/rotation grid fits).
+_SCENE_FOV_A = (60.0, 80.0)
+_SPACING_A = (2.0, 4.0)
+_Z_A = (40, 90)
+_Z_B = (6, 30)
+_ANGLE_JITTER_DEG = 5.0
+
+
+@runtime_checkable
+class ColumnListProvider(Protocol):
+    """Supplies a deterministic ColumnList per scene index."""
+
+    def __len__(self) -> int: ...
+    def get(self, scene_idx: int) -> ColumnList: ...
+
+
+def _build_lattice(
+    fov_A: float, spacing_A: float, z_a: float, z_b: float, angle_deg: float
+) -> ColumnList:
+    """Two-species checkerboard square lattice spanning the FOV, with small angle jitter."""
+    coords = torch.arange(spacing_A / 2.0, fov_A, spacing_A)
+    k = coords.numel()
+    xx, yy = torch.meshgrid(coords, coords, indexing="ij")
+    pos = torch.stack([xx.reshape(-1), yy.reshape(-1)], dim=-1)
+    n = pos.shape[0]
+    ix = torch.arange(k)
+    gi, gj = torch.meshgrid(ix, ix, indexing="ij")
+    parity = ((gi + gj) % 2).reshape(-1).bool()
+    z = torch.where(parity, torch.full((n,), float(z_a)), torch.full((n,), float(z_b)))
+    if n > 0 and angle_deg != 0.0:
+        theta = math.radians(angle_deg)
+        center = fov_A / 2.0
+        rot = torch.tensor(
+            [[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]],
+            dtype=pos.dtype,
+        )
+        pos = (pos - center) @ rot.T + center
+    return ColumnList(positions_A=pos, z=z, count=torch.ones(n), fov_A=float(fov_A))
+
+
+class SyntheticLatticeProvider:
+    """Index-keyed deterministic two-species crystal lattices."""
+
+    def __init__(self, cfg: SyntheticDatasetConfig | DictConfig, master_seed: int) -> None:
+        self.n_scenes = int(cfg.n_scenes)
+        self.master_seed = int(master_seed)
+
+    def __len__(self) -> int:
+        return self.n_scenes
+
+    def get(self, scene_idx: int) -> ColumnList:
+        if not 0 <= scene_idx < self.n_scenes:
+            raise IndexError(f"scene_idx {scene_idx} out of range [0, {self.n_scenes})")
+        rng = np.random.default_rng(
+            np.random.SeedSequence([self.master_seed, int(scene_idx), _SCENE_SALT])
+        )
+        fov_A = float(rng.uniform(*_SCENE_FOV_A))
+        spacing_A = float(rng.uniform(*_SPACING_A))
+        z_a = float(rng.integers(_Z_A[0], _Z_A[1] + 1))
+        z_b = float(rng.integers(_Z_B[0], _Z_B[1] + 1))
+        angle_deg = float(rng.uniform(-_ANGLE_JITTER_DEG, _ANGLE_JITTER_DEG))
+        return _build_lattice(fov_A, spacing_A, z_a, z_b, angle_deg)
