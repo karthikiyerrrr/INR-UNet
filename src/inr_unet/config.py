@@ -36,11 +36,25 @@ class ModelConfig:
 
 
 @dataclass
+class SyntheticDatasetConfig:
+    n_scenes: int = 64
+    draws_per_scene: int = 16
+    crop_size: int = 48              # S - encoder input; renders < S are reflect-padded
+    sample_q: int = 2304             # Q = 48**2 query points
+    label_kind: str = "gaussian"     # LABEL_FIELDS key
+    target_pixel_size_A_min: float = 0.05
+    target_pixel_size_A_max: float = 0.30
+    master_seed: int = 0
+    device: str = "cpu"
+
+
+@dataclass
 class DataConfig:
     root: str = "data"
     image_size: int = 256
     batch_size: int = 8
     num_workers: int = 4
+    synthetic: SyntheticDatasetConfig = field(default_factory=SyntheticDatasetConfig)
 
 
 @dataclass
