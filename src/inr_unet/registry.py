@@ -47,6 +47,7 @@ DECODERS = Registry("decoders")
 MODELS = Registry("models")
 POTENTIALS = Registry("potentials")
 BACKGROUNDS = Registry("backgrounds")
+LABEL_FIELDS = Registry("label_fields")
 
 
 def build_model(cfg: DictConfig) -> nn.Module:

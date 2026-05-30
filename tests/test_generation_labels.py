@@ -5,8 +5,15 @@ import math
 import pytest
 import torch
 
-from inr_unet.data.generation.labels import circular_mask, column_radius, gaussian_mask
+from inr_unet.data.generation.labels import (
+    CircularField,
+    GaussianField,
+    circular_mask,
+    column_radius,
+    gaussian_mask,
+)
 from inr_unet.data.generation.structures import Grid, ImagingCondition
+from inr_unet.registry import LABEL_FIELDS
 
 
 def test_column_radius_formula():
@@ -36,3 +43,83 @@ def test_gaussian_mask_equalized_across_columns():
     # both columns reach the same peak (equal weights), so two distinct near-1 peaks
     peaks = mask[mask > 0.99]
     assert peaks.numel() >= 2
+
+
+def test_label_fields_registered():
+    assert "gaussian" in LABEL_FIELDS
+    assert "circular" in LABEL_FIELDS
+    assert isinstance(LABEL_FIELDS.get("gaussian")(), GaussianField)
+    assert isinstance(LABEL_FIELDS.get("circular")(), CircularField)
+
+
+def test_gaussian_values_at_peak_and_decay():
+    pos = torch.tensor([[1.0, 1.0], [2.4, 2.4]])
+    radii = torch.zeros(2)
+    field = GaussianField()
+    # query exactly on a column -> 1.0; far away -> ~0
+    q = torch.tensor([[1.0, 1.0], [2.4, 2.4], [10.0, 10.0]])
+    vals = field.values_at(pos, radii, q)
+    assert vals[0].item() == pytest.approx(1.0, abs=1e-5)
+    assert vals[1].item() == pytest.approx(1.0, abs=1e-5)
+    assert vals[2].item() < 1e-3
+
+
+def test_circular_values_at_binary():
+    pos = torch.tensor([[5.0, 5.0]])
+    radii = torch.tensor([1.0])
+    field = CircularField()
+    q = torch.tensor([[5.0, 5.0], [5.5, 5.0], [7.0, 5.0]])  # inside, inside, outside
+    vals = field.values_at(pos, radii, q)
+    assert vals[0].item() == 1.0
+    assert vals[1].item() == 1.0
+    assert vals[2].item() == 0.0
+
+
+def test_rasterize_matches_values_at_on_grid():
+    grid = Grid(output_size=32, pixel_size_A=0.1)
+    pos = torch.tensor([[1.0, 1.5], [2.0, 0.7]])
+    radii = torch.full((2,), 0.3)
+    for field in (GaussianField(), CircularField()):
+        raster = field.rasterize(pos, radii, grid)
+        yy, xx = grid.pixel_coords()
+        q = torch.stack([(xx * grid.pixel_size_A).reshape(-1),
+                         (yy * grid.pixel_size_A).reshape(-1)], dim=-1)
+        flat = field.values_at(pos, radii, q).reshape(grid.output_size, grid.output_size)
+        assert torch.allclose(raster, flat, atol=1e-6)
+
+
+def test_values_at_empty_columns():
+    field = GaussianField()
+    q = torch.tensor([[1.0, 1.0], [2.0, 2.0]])
+    vals = field.values_at(torch.zeros((0, 2)), torch.zeros((0,)), q)
+    assert vals.shape == (2,)
+    assert torch.all(vals == 0)
+
+
+def test_gaussian_values_at_discriminates_axes():
+    field = GaussianField()
+    pos = torch.tensor([[1.0, 3.0]])  # x=1, y=3
+    radii = torch.zeros(1)
+    on = field.values_at(pos, radii, torch.tensor([[1.0, 3.0]]))
+    swapped = field.values_at(pos, radii, torch.tensor([[3.0, 1.0]]))
+    assert on[0].item() == pytest.approx(1.0, abs=1e-5)
+    assert swapped[0].item() < 1e-3  # (3,1) is far from the column at (1,3)
+
+
+def test_circular_values_at_distinct_radii():
+    field = CircularField()
+    pos = torch.tensor([[0.0, 0.0], [10.0, 0.0]])
+    radii = torch.tensor([0.5, 2.0])
+    # 1.5 A from each column: outside the r=0.5 disk, inside the r=2.0 disk
+    q = torch.tensor([[1.5, 0.0], [8.5, 0.0]])
+    vals = field.values_at(pos, radii, q)
+    assert vals[0].item() == 0.0  # near small-radius column, outside
+    assert vals[1].item() == 1.0  # near large-radius column, inside
+
+
+def test_circular_values_at_empty_columns():
+    field = CircularField()
+    q = torch.tensor([[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]])
+    vals = field.values_at(torch.zeros((0, 2)), torch.zeros((0,)), q)
+    assert vals.shape == (3,)
+    assert torch.all(vals == 0)
