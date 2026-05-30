@@ -45,7 +45,6 @@ class SyntheticDatasetConfig:
     target_pixel_size_A_min: float = 0.05
     target_pixel_size_A_max: float = 0.30
     master_seed: int = 0
-    device: str = "cpu"
 
 
 @dataclass

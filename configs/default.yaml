@@ -29,7 +29,6 @@ data:
     target_pixel_size_A_min: 0.05
     target_pixel_size_A_max: 0.30
     master_seed: 0
-    device: cpu
 train:
   epochs: 100
   lr: 1.0e-4

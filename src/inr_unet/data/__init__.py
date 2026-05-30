@@ -10,11 +10,17 @@ from inr_unet.data.generation import (
     RenderParams,
     TEMRenderer,
 )
+from inr_unet.data.providers import ColumnListProvider, SyntheticLatticeProvider
+from inr_unet.data.render_source import RenderedSample, SyntheticRenderSource
 from inr_unet.data.transforms import Normalize
 
 __all__ = [
     "STEMSegDataset",
     "LIIFSegDataset",
+    "SyntheticRenderSource",
+    "RenderedSample",
+    "ColumnListProvider",
+    "SyntheticLatticeProvider",
     "AugmentationSampler",
     "TEMRenderer",
     "ColumnList",
