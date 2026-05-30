@@ -13,8 +13,10 @@ def _():
     from plotly.subplots import make_subplots
     from omegaconf import OmegaConf
 
+    from inr_unet.config import SamplerConfig
     from inr_unet.data import (
         IMAGING_CONDITIONS,
+        AugmentationSampler,
         ColumnList,
         RenderParams,
         TEMRenderer,
@@ -24,12 +26,14 @@ def _():
     from inr_unet.data.generation.psf import wavelength_A
 
     return (
+        AugmentationSampler,
         BackgroundSpec,
         ColumnList,
         IMAGING_CONDITIONS,
         NoiseSpec,
         OmegaConf,
         RenderParams,
+        SamplerConfig,
         TEMRenderer,
         column_radius,
         go,
@@ -268,6 +272,92 @@ def _(go, make_subplots, mo, out, params, render_error):
         fig.update_layout(height=560, width=860, margin=dict(l=8, r=8, t=28, b=8))
         plot = fig
     plot
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## Augmentation sampler — draw diversity
+
+    The `AugmentationSampler` turns the pure renderer into a dataset generator: from a
+    single structure it draws an imaging condition and a full `RenderParams` (FOV,
+    pixel size, rotation, background, dose, position offset) **deterministically per
+    draw index**, across the paper's Table-1 grid. Scrub the master seed and draw
+    count to see the augmentation diversity one structure yields.
+
+    `max_fov_A` is the structure's physical extent; the sampler only picks render
+    FOVs that fit inside it (with rotation headroom), so every draw renders. Each
+    panel is titled with the condition, render FOV, rotation, and background it drew.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    samp_seed = mo.ui.slider(0, 50, value=0, step=1, label="master seed")
+    n_draws = mo.ui.slider(2, 9, value=6, step=1, label="draw count")
+    samp_max_fov = mo.ui.slider(20, 80, value=60, step=5, label="structure FOV / max_fov_A (A)")
+    samp_spacing = mo.ui.slider(1.0, 5.0, value=2.5, step=0.1, label="lattice spacing (A)")
+
+    mo.hstack([samp_seed, n_draws, samp_max_fov, samp_spacing], justify="start", gap=1)
+    return n_draws, samp_max_fov, samp_seed, samp_spacing
+
+
+@app.cell
+def _(
+    AugmentationSampler,
+    OmegaConf,
+    SamplerConfig,
+    TEMRenderer,
+    make_lattice,
+    n_draws,
+    samp_max_fov,
+    samp_seed,
+    samp_spacing,
+):
+    samp_renderer = TEMRenderer(
+        OmegaConf.create(
+            {"potential_backend": "z_power", "sigma_potential_A": 0.4, "aperture_soft": True}
+        )
+    )
+    sampler = AugmentationSampler(
+        OmegaConf.structured(SamplerConfig), master_seed=int(samp_seed.value)
+    )
+    samp_cols = make_lattice(float(samp_max_fov.value), samp_spacing.value, 78, 22, True)
+
+    draws = []
+    for _i in range(int(n_draws.value)):
+        _cond, _p = sampler.sample(_i, max_fov_A=float(samp_max_fov.value))
+        _out = samp_renderer.render(samp_cols, _cond, _p)
+        draws.append((_i, _cond, _p, _out))
+    return (draws,)
+
+
+@app.cell(hide_code=True)
+def _(draws, go, make_subplots):
+    _ncols = 3
+    _nrows = (len(draws) + _ncols - 1) // _ncols
+    _bg_abbr = {"constant": "const", "linear_ramp": "ramp", "nonlinear": "nonlin"}
+    _titles = [
+        f"#{_i} {_c.name} · {_p.output_size * _p.pixel_size_A:.0f}Å · "
+        f"{_p.rotation_deg:.0f}° · {_bg_abbr.get(_p.background.kind, _p.background.kind)}"
+        for (_i, _c, _p, _o) in draws
+    ]
+    samp_fig = make_subplots(
+        rows=_nrows, cols=_ncols, subplot_titles=_titles,
+        horizontal_spacing=0.03, vertical_spacing=0.12,
+    )
+    for _k, (_i, _c, _p, _o) in enumerate(draws):
+        samp_fig.add_trace(
+            go.Heatmap(z=_o.image.numpy(), colorscale="gray", showscale=False),
+            row=_k // _ncols + 1, col=_k % _ncols + 1,
+        )
+    samp_fig.update_xaxes(showticklabels=False, ticks="")
+    samp_fig.update_yaxes(showticklabels=False, ticks="", autorange="reversed")
+    samp_fig.update_annotations(font_size=12)
+    samp_fig.update_layout(height=260 * _nrows, width=860, margin=dict(l=8, r=8, t=34, b=8))
+    samp_fig
     return
 
 
