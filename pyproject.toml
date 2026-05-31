@@ -36,5 +36,12 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+# marimo notebooks are a reactive cell graph, not modules: the trailing bare
+# expression in a cell is its rendered output (B018), plot/markdown builders run
+# long (E501), and the import cell keeps exploratory imports the linter cannot see
+# used across cells (F401/I001). These are notebook idioms, not defects.
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*" = ["E501", "B007", "B018", "B905", "F401", "I001"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

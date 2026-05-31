@@ -13,12 +13,14 @@ def _():
     from plotly.subplots import make_subplots
     from omegaconf import OmegaConf
 
-    from inr_unet.config import SamplerConfig
+    from inr_unet.config import ExperimentConfig, SamplerConfig
     from inr_unet.data import (
         IMAGING_CONDITIONS,
         AugmentationSampler,
         ColumnList,
+        LIIFSegDataset,
         RenderParams,
+        STEMSegDataset,
         TEMRenderer,
     )
     from inr_unet.data.generation.structures import BackgroundSpec, NoiseSpec
@@ -29,10 +31,13 @@ def _():
         AugmentationSampler,
         BackgroundSpec,
         ColumnList,
+        ExperimentConfig,
         IMAGING_CONDITIONS,
+        LIIFSegDataset,
         NoiseSpec,
         OmegaConf,
         RenderParams,
+        STEMSegDataset,
         SamplerConfig,
         TEMRenderer,
         column_radius,
@@ -358,6 +363,179 @@ def _(draws, go, make_subplots):
     samp_fig.update_annotations(font_size=12)
     samp_fig.update_layout(height=260 * _nrows, width=860, margin=dict(l=8, r=8, t=34, b=8))
     samp_fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Datasets — render source -> trainable tensors
+
+    `SyntheticRenderSource` maps a flat index to a fixed `crop_size`x`crop_size` input
+    (deterministically cropped when the render is larger, reflect-padded when smaller),
+    together with the **analytic** column coordinates inside that crop. Two datasets
+    format it for training:
+
+    - **`STEMSegDataset`** -> `(image[1,S,S], mask[1,S,S])` -- the label field rasterized
+      onto the input grid, for the baseline fixed-resolution UNet.
+    - **`LIIFSegDataset`** -> `(image[1,S,S], coords[Q,2], cell[Q,2], gt[Q,1])` -- `Q`
+      query points with **continuous** `(x, y)` coords (normalized to [-1, 1] over the
+      crop), a physical target pixel size `cell` (A/px), and the label sampled
+      analytically at those exact coordinates. No rasterization -- supervision is
+      resolution-free.
+
+    The label is a **sharp center-marker** (gaussian FWHM 0.2 A, ~1-2 px) -- deliberately
+    far narrower than the PSF-broadened, often background-dominated column in the input.
+    Below, the input row carries red crosses at each labeled column center so the
+    label<->image correspondence is visible (the input and its label share the exact same
+    extent and pixel scale). Everything is reproducible from `master_seed + idx`.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    ds_seed = mo.ui.slider(0, 20, value=0, step=1, label="master seed")
+    ds_label = mo.ui.dropdown(options=["gaussian", "circular"], value="gaussian", label="label field")
+    ds_q = mo.ui.slider(256, 4096, value=1024, step=256, label="LIIF query points Q")
+
+    mo.hstack([ds_seed, ds_label, ds_q], justify="start", gap=1)
+    return ds_label, ds_q, ds_seed
+
+
+@app.cell
+def _(
+    ExperimentConfig,
+    LIIFSegDataset,
+    OmegaConf,
+    STEMSegDataset,
+    ds_label,
+    ds_q,
+    ds_seed,
+    mo,
+):
+    ds_cfg = OmegaConf.structured(ExperimentConfig)
+    ds_cfg.data.synthetic.n_scenes = 4
+    ds_cfg.data.synthetic.draws_per_scene = 8
+    ds_cfg.data.synthetic.master_seed = int(ds_seed.value)
+    ds_cfg.data.synthetic.label_kind = ds_label.value
+    ds_cfg.data.synthetic.sample_q = int(ds_q.value)
+
+    stem_ds = STEMSegDataset(ds_cfg)
+    liif_ds = LIIFSegDataset(ds_cfg)
+    ds_S = stem_ds.source.crop_size
+
+    # Split indices by branch: the render filled the crop (crop) vs needed reflect-pad.
+    ds_crop_idx, ds_pad_idx = [], []
+    for _i in range(len(stem_ds)):
+        _s = stem_ds.source.get(_i)
+        if _s.valid_extent_A < ds_S * _s.input_pixel_size_A - 1e-9:
+            ds_pad_idx.append(_i)
+        else:
+            ds_crop_idx.append(_i)
+
+    mo.md(
+        f"`{len(stem_ds)}` samples &middot; **{len(ds_crop_idx)}** crop, "
+        f"**{len(ds_pad_idx)}** reflect-pad &middot; input {ds_S}x{ds_S} &middot; "
+        f"Q = {ds_cfg.data.synthetic.sample_q}"
+    )
+    return ds_S, ds_crop_idx, ds_pad_idx, liif_ds, stem_ds
+
+
+@app.cell(hide_code=True)
+def _(ds_S, ds_crop_idx, ds_label, ds_pad_idx, go, make_subplots, stem_ds):
+    _show = ds_crop_idx[:3] + ds_pad_idx[:1]
+    _titles = [f"#{_i} input + centers" for _i in _show] + [f"#{_i} {ds_label.value} label" for _i in _show]
+    stem_fig = make_subplots(
+        rows=2, cols=len(_show), subplot_titles=_titles,
+        horizontal_spacing=0.02, vertical_spacing=0.12,
+    )
+    for _c, _i in enumerate(_show):
+        _img, _mask = stem_ds[_i]
+        _s = stem_ds.source.get(_i)
+        _ppx = _s.positions_A.numpy() / _s.input_pixel_size_A
+        _in = (_ppx[:, 0] >= 0) & (_ppx[:, 0] < ds_S) & (_ppx[:, 1] >= 0) & (_ppx[:, 1] < ds_S)
+        stem_fig.add_trace(go.Heatmap(z=_img[0].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
+        stem_fig.add_trace(
+            go.Scatter(
+                x=_ppx[_in, 0], y=_ppx[_in, 1], mode="markers",
+                marker=dict(symbol="cross-thin", size=7, color="#ff3b3b", line=dict(width=1.3, color="#ff3b3b")),
+                showlegend=False,
+            ),
+            row=1, col=_c + 1,
+        )
+        stem_fig.add_trace(
+            go.Heatmap(z=_mask[0].numpy(), colorscale="viridis", zmin=0, zmax=1, showscale=False),
+            row=2, col=_c + 1,
+        )
+    _n = 2 * len(_show)
+    for _k in range(1, _n + 1):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        stem_fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[ds_S, 0], showticklabels=False, ticks="")
+        stem_fig.layout[_xk].update(constrain="domain", range=[0, ds_S], showticklabels=False, ticks="")
+    stem_fig.update_annotations(font_size=12)
+    stem_fig.update_layout(height=520, width=860, margin=dict(l=8, r=8, t=30, b=8))
+    stem_fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### LIIF supervision -- continuous queries over the crop
+
+    Each panel overlays the `Q` query points on its input image, colored by the analytic
+    `gt` at that point (viridis, 0 -> 1). Titles show the **input** pixel size (the
+    encoder's resolution) and the per-item **cell** (the decode target resolution) -- both
+    vary across items, which is exactly the continuous-resolution signal the LIIF head
+    learns from. In **reflect-pad** items the queries stay inside the valid (non-padded)
+    region, so the padded border carries no supervision.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(ds_S, ds_crop_idx, ds_pad_idx, go, liif_ds, make_subplots):
+    _show = ds_crop_idx[:2] + ds_pad_idx[:1]
+    _items = []
+    for _i in _show:
+        _im, _coords, _cell, _gt = liif_ds[_i]
+        _s = liif_ds.source.get(_i)
+        _pad = _s.valid_extent_A < ds_S * _s.input_pixel_size_A - 1e-9
+        _items.append((_i, _im, _coords, _cell, _gt, _s, _pad))
+    _titles = [
+        f"#{_i} · {'pad' if _pad else 'crop'} · "
+        f"in {_s.input_pixel_size_A:.2f} -> cell {float(_cell[0, 0]):.2f} A/px"
+        for (_i, _im, _coords, _cell, _gt, _s, _pad) in _items
+    ]
+    liif_fig = make_subplots(rows=1, cols=len(_items), subplot_titles=_titles, horizontal_spacing=0.06)
+    for _c, (_i, _im, _coords, _cell, _gt, _s, _pad) in enumerate(_items):
+        _qpx = (_coords.numpy() + 1.0) / 2.0 * ds_S
+        _last = _c == len(_items) - 1
+        liif_fig.add_trace(go.Heatmap(z=_im[0].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
+        liif_fig.add_trace(
+            go.Scatter(
+                x=_qpx[:, 0], y=_qpx[:, 1], mode="markers",
+                marker=dict(
+                    size=4, color=_gt[:, 0].numpy(), colorscale="viridis", cmin=0, cmax=1,
+                    showscale=_last, colorbar=dict(title="gt", thickness=12, len=0.9),
+                ),
+                showlegend=False,
+            ),
+            row=1, col=_c + 1,
+        )
+    _n = len(_items)
+    for _k in range(1, _n + 1):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        liif_fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[ds_S, 0], showticklabels=False, ticks="")
+        liif_fig.layout[_xk].update(constrain="domain", range=[0, ds_S], showticklabels=False, ticks="")
+    liif_fig.update_annotations(font_size=11)
+    liif_fig.update_layout(height=360, width=900, margin=dict(l=8, r=8, t=34, b=8))
+    liif_fig
     return
 
 
