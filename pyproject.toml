@@ -12,6 +12,7 @@ dependencies = [
     "omegaconf",
     "tifffile",
     "pillow",
+    "pymatgen",
 ]
 
 [dependency-groups]
