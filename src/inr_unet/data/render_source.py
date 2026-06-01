@@ -50,6 +50,10 @@ class SyntheticRenderSource:
         self.master_seed = int(syn.master_seed)
         self.crop_size = int(syn.crop_size)
         self.draws_per_scene = int(syn.draws_per_scene)
+        self.min_columns_in_crop = int(syn.min_columns_in_crop)
+        self.empty_crop_fraction = float(syn.empty_crop_fraction)
+        self.crop_redraw_cap = int(syn.crop_redraw_cap)
+        self.redraw_enabled = str(cfg.data.occupancy.mode) != "full"
         self.provider = SyntheticLatticeProvider(syn, self.master_seed)
         self.sampler = AugmentationSampler(cfg.generation.sampler, self.master_seed)
         self.renderer = TEMRenderer(cfg.generation)
@@ -75,9 +79,7 @@ class SyntheticRenderSource:
         positions = out.positions_A
         radii = out.radii_A
         if h >= s:
-            # render is square (h == w == output_size), so the same range bounds both offsets
-            oy = int(rng.integers(0, h - s + 1))
-            ox = int(rng.integers(0, h - s + 1))
+            oy, ox = self._choose_offset(positions, h, s, px, rng)
             image = out.image[oy:oy + s, ox:ox + s]
             valid_extent_A = s * px
             positions = positions - torch.tensor([ox * px, oy * px], dtype=positions.dtype)
@@ -94,3 +96,26 @@ class SyntheticRenderSource:
             input_pixel_size_A=float(px),
             valid_extent_A=float(valid_extent_A),
         )
+
+    def _choose_offset(
+        self, positions: torch.Tensor, h: int, s: int, px: float, rng: np.random.Generator
+    ) -> tuple[int, int]:
+        """Pick a crop offset. Legacy single draw unless redraw is enabled for finite particles."""
+        if not self.redraw_enabled:
+            oy = int(rng.integers(0, h - s + 1))
+            ox = int(rng.integers(0, h - s + 1))
+            return oy, ox
+        allow_empty = rng.random() < self.empty_crop_fraction
+        oy = ox = 0
+        for _ in range(self.crop_redraw_cap):
+            oy = int(rng.integers(0, h - s + 1))
+            ox = int(rng.integers(0, h - s + 1))
+            if allow_empty:
+                break
+            shifted = positions - torch.tensor([ox * px, oy * px], dtype=positions.dtype)
+            in_crop = (
+                ((shifted >= 0.0) & (shifted <= s * px)).all(dim=1).sum().item()
+            )
+            if in_crop >= self.min_columns_in_crop:
+                break
+        return oy, ox

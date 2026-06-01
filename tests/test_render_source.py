@@ -121,3 +121,34 @@ def test_reflect_pad_to_reflect_branch_keeps_render_top_left():
 def test_returns_rendered_sample_type():
     src = SyntheticRenderSource(_cfg())
     assert isinstance(src.get(0), RenderedSample)
+
+
+def test_redraw_disabled_when_occupancy_full_reproduces_offsets():
+    # With occupancy.mode == "full" the redraw path must not engage; results stay deterministic.
+    from omegaconf import OmegaConf
+
+    from inr_unet.config import ExperimentConfig
+    from inr_unet.data.render_source import SyntheticRenderSource
+
+    cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.synthetic.n_scenes = 2
+    cfg.data.synthetic.draws_per_scene = 4
+    src = SyntheticRenderSource(cfg)
+    assert src.redraw_enabled is False
+    a = src.get(3)
+    b = SyntheticRenderSource(cfg).get(3)
+    import torch
+
+    assert torch.equal(a.image, b.image)
+
+
+def test_redraw_enabled_when_occupancy_active():
+    from omegaconf import OmegaConf
+
+    from inr_unet.config import ExperimentConfig
+    from inr_unet.data.render_source import SyntheticRenderSource
+
+    cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.occupancy.mode = "facet_polygon"
+    src = SyntheticRenderSource(cfg)
+    assert src.redraw_enabled is True
