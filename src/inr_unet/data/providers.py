@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 import torch
+import yaml
 
 from inr_unet.data.generation.structures import ColumnList
 
@@ -17,6 +19,8 @@ if TYPE_CHECKING:
 
 # Decorrelated RNG stream (length-3 SeedSequence root; see plan determinism note).
 _SCENE_SALT = 1009
+# Decorrelated RNG stream for CIF scenes (distinct from the synthetic-lattice salt).
+_CIF_SALT = 5011
 # Lattice generation ranges (internal; scene FOV is large so the sampler's FOV/rotation grid fits).
 _SCENE_FOV_A = (60.0, 80.0)
 _SPACING_A = (2.0, 4.0)
@@ -81,3 +85,67 @@ class SyntheticLatticeProvider:
         z_b = float(rng.integers(_Z_B[0], _Z_B[1] + 1))
         angle_deg = float(rng.uniform(-_ANGLE_JITTER_DEG, _ANGLE_JITTER_DEG))
         return _build_lattice(fov_A, spacing_A, z_a, z_b, angle_deg)
+
+
+class CIFProvider:
+    """Index-keyed deterministic scenes from a bundled CIF set, projected per zone axis."""
+
+    def __init__(
+        self,
+        manifest_path: str,
+        n_scenes: int,
+        master_seed: int,
+        n_exponent: float,
+        group_tol_A: float,
+        scene_fov_A: tuple[float, float],
+        rotation_jitter_deg: float,
+    ) -> None:
+        self.n_scenes = int(n_scenes)
+        self.master_seed = int(master_seed)
+        self.n_exponent = float(n_exponent)
+        self.group_tol_A = float(group_tol_A)
+        self.scene_fov_A = (float(scene_fov_A[0]), float(scene_fov_A[1]))
+        self.rotation_jitter_deg = float(rotation_jitter_deg)
+        manifest = yaml.safe_load(Path(manifest_path).read_text())
+        self._cif_dir = Path(manifest_path).parent
+        self._entries = manifest["entries"]
+        self._structures: dict[str, object] = {}
+
+    def __len__(self) -> int:
+        return self.n_scenes
+
+    def _structure(self, cif_name: str):
+        from pymatgen.core import Structure
+
+        if cif_name not in self._structures:
+            self._structures[cif_name] = Structure.from_file(self._cif_dir / cif_name)
+        return self._structures[cif_name]
+
+    def get(self, scene_idx: int) -> ColumnList:
+        if not 0 <= scene_idx < self.n_scenes:
+            raise IndexError(f"scene_idx {scene_idx} out of range [0, {self.n_scenes})")
+        from inr_unet.data.projection import project_structure
+
+        rng = np.random.default_rng(
+            np.random.SeedSequence([self.master_seed, int(scene_idx), _CIF_SALT])
+        )
+        entry = self._entries[scene_idx % len(self._entries)]
+        fov_A = float(rng.uniform(*self.scene_fov_A))
+        angle_deg = float(rng.uniform(-self.rotation_jitter_deg, self.rotation_jitter_deg))
+        pos, z, count, basis = project_structure(
+            self._structure(entry["cif"]),
+            entry["zone_axis"],
+            fov_A=fov_A,
+            n_exponent=self.n_exponent,
+            group_tol_A=self.group_tol_A,
+        )
+        if pos.shape[0] > 0 and angle_deg != 0.0:
+            theta = math.radians(angle_deg)
+            c, s = math.cos(theta), math.sin(theta)
+            rot = torch.tensor([[c, -s], [s, c]], dtype=pos.dtype)
+            center = fov_A / 2.0
+            pos = (pos - center) @ rot.T + center
+            basis = (rot @ basis.T).T
+        return ColumnList(
+            positions_A=pos, z=z, count=count, fov_A=fov_A, lattice_basis_A=basis
+        )
