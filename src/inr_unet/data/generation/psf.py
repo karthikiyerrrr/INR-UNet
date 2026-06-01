@@ -17,13 +17,26 @@ def wavelength_A(energy_keV: float) -> float:
     return 12.2643 / math.sqrt(e * (1.0 + 0.97845e-6 * e))
 
 
-def _aberration_chi(k: torch.Tensor, lam: float, cond: ImagingCondition) -> torch.Tensor:
-    """Aberration phase chi(k); zero when defocus = C3 = C5 = 0."""
-    return (2.0 * math.pi / lam) * (
+def _aberration_chi(
+    k: torch.Tensor, phi: torch.Tensor, lam: float, cond: ImagingCondition
+) -> torch.Tensor:
+    """Aberration phase chi(k, phi); radial terms plus 2-fold (A1) astigmatism.
+
+    Zero when defocus = C3 = C5 = A1 = 0. The A1 term shares defocus's lam**2 * k**2
+    radial dependence, azimuthally modulated by cos(2(phi - azimuth)); A1 is in angstroms.
+    With A1 = 0 the term is a zero tensor, so chi is bitwise-identical to the radial-only
+    form.
+    """
+    radial = (
         0.5 * cond.defocus_A * lam**2 * k**2
         + 0.25 * cond.c3_A * lam**4 * k**4
         + (1.0 / 6.0) * cond.c5_A * lam**6 * k**6
     )
+    astig = (
+        0.5 * cond.astig_a1_A * lam**2 * k**2
+        * torch.cos(2.0 * (phi - cond.astig_a1_azimuth_rad))
+    )
+    return (2.0 * math.pi / lam) * (radial + astig)
 
 
 def _smoothstep(t: torch.Tensor) -> torch.Tensor:
@@ -45,13 +58,14 @@ def build_psf(cond: ImagingCondition, grid: Grid, *, soft: bool = True) -> torch
 
     ky, kx = grid.freq_coords()
     k = torch.sqrt(ky**2 + kx**2)
+    phi = torch.atan2(ky, kx)
     if soft:
         dk = 1.0 / grid.extent_A  # frequency sampling
         aperture = _smoothstep((k_cut - k) / (2.0 * dk) + 0.5)
     else:
         aperture = (k <= k_cut).to(torch.float32)
 
-    chi = _aberration_chi(k, lam, cond)
+    chi = _aberration_chi(k, phi, lam, cond)
     probe_k = aperture * torch.exp(-1j * chi)
     probe_r = torch.fft.ifft2(probe_k)
     psf = probe_r.real**2 + probe_r.imag**2  # corner-origin
