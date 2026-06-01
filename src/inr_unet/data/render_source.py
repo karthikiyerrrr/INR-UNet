@@ -11,7 +11,8 @@ import torch.nn.functional as F
 
 from inr_unet.data.generation.renderer import TEMRenderer
 from inr_unet.data.generation.sampler import AugmentationSampler
-from inr_unet.data.providers import SyntheticLatticeProvider
+from inr_unet.data.occupancy import FiniteSupportProvider
+from inr_unet.data.providers import CIFProvider, SyntheticLatticeProvider
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -54,9 +55,30 @@ class SyntheticRenderSource:
         self.empty_crop_fraction = float(syn.empty_crop_fraction)
         self.crop_redraw_cap = int(syn.crop_redraw_cap)
         self.redraw_enabled = str(cfg.data.occupancy.mode) != "full"
-        self.provider = SyntheticLatticeProvider(syn, self.master_seed)
+        self.provider = self._build_provider(cfg)
         self.sampler = AugmentationSampler(cfg.generation.sampler, self.master_seed)
         self.renderer = TEMRenderer(cfg.generation)
+
+    def _build_provider(self, cfg: DictConfig):
+        syn = cfg.data.synthetic
+        if str(cfg.data.provider) == "cif":
+            inner = CIFProvider(
+                manifest_path=str(cfg.data.cif.manifest_path),
+                n_scenes=int(syn.n_scenes),
+                master_seed=self.master_seed,
+                n_exponent=float(cfg.generation.sampler.z_exponent),
+                group_tol_A=float(cfg.data.cif.group_tol_A),
+                scene_fov_A=(
+                    float(cfg.data.cif.scene_fov_A_min),
+                    float(cfg.data.cif.scene_fov_A_max),
+                ),
+                rotation_jitter_deg=float(cfg.data.cif.rotation_jitter_deg),
+            )
+        else:
+            inner = SyntheticLatticeProvider(syn, self.master_seed)
+        if self.redraw_enabled:  # occupancy.mode != "full"
+            return FiniteSupportProvider(inner, cfg.data.occupancy, self.master_seed)
+        return inner
 
     def __len__(self) -> int:
         return len(self.provider) * self.draws_per_scene

@@ -152,3 +152,43 @@ def test_redraw_enabled_when_occupancy_active():
     cfg.data.occupancy.mode = "facet_polygon"
     src = SyntheticRenderSource(cfg)
     assert src.redraw_enabled is True
+
+
+def test_cif_provider_end_to_end_sample():
+    from omegaconf import OmegaConf
+
+    from inr_unet.config import ExperimentConfig
+    from inr_unet.data.render_source import SyntheticRenderSource
+
+    cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.provider = "cif"
+    cfg.data.synthetic.n_scenes = 2
+    cfg.data.synthetic.draws_per_scene = 2
+    src = SyntheticRenderSource(cfg)
+    s = src.get(0)
+    assert s.image.shape == (cfg.data.synthetic.crop_size, cfg.data.synthetic.crop_size)
+
+
+def test_occupancy_wrapper_applied_when_active():
+    from omegaconf import OmegaConf
+
+    from inr_unet.config import ExperimentConfig
+    from inr_unet.data.occupancy import FiniteSupportProvider
+    from inr_unet.data.render_source import SyntheticRenderSource
+
+    cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.occupancy.mode = "blob"
+    src = SyntheticRenderSource(cfg)
+    assert isinstance(src.provider, FiniteSupportProvider)
+
+
+def test_synthetic_full_provider_unwrapped():
+    from omegaconf import OmegaConf
+
+    from inr_unet.config import ExperimentConfig
+    from inr_unet.data.providers import SyntheticLatticeProvider
+    from inr_unet.data.render_source import SyntheticRenderSource
+
+    cfg = OmegaConf.structured(ExperimentConfig)
+    src = SyntheticRenderSource(cfg)
+    assert isinstance(src.provider, SyntheticLatticeProvider)
