@@ -79,6 +79,8 @@ class ImagingCondition:
     c3_A: float = 0.0
     c5_A: float = 0.0
     defocus_A: float = 0.0
+    astig_a1_A: float = 0.0           # 2-fold astigmatism magnitude (angstroms)
+    astig_a1_azimuth_rad: float = 0.0  # astigmatism orientation (radians)
     name: str = "custom"
 
 

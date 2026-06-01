@@ -120,6 +120,19 @@ def test_columnlist_rejects_misshaped_lattice_basis():
         cols.validate(Grid(output_size=10, pixel_size_A=1.0))
 
 
+def test_imaging_condition_astig_defaults_zero():
+    from inr_unet.data.generation.structures import ImagingCondition
+
+    cond = ImagingCondition(200.0, 24.0, 0.9, name="t")
+    assert cond.astig_a1_A == 0.0
+    assert cond.astig_a1_azimuth_rad == 0.0
+    # every named preset stays radial-only (defocus and astig all zero)
+    for c in IMAGING_CONDITIONS.values():
+        assert c.defocus_A == 0.0
+        assert c.astig_a1_A == 0.0
+        assert c.astig_a1_azimuth_rad == 0.0
+
+
 def test_renderer_is_implemented():
     from omegaconf import OmegaConf
 
