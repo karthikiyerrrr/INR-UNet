@@ -27,21 +27,60 @@ def _sampler(master_seed=123):
 
 def test_seed_streams_deterministic_and_distinct():
     s = _sampler()
-    rng_a, seed_a = s._streams(5)
-    rng_b, seed_b = s._streams(5)
-    rng_c, seed_c = s._streams(6)
-    # same index -> same derived render seed and same first draw
+    rng_a, seed_a, ab_a = s._streams(5)
+    rng_b, seed_b, ab_b = s._streams(5)
+    rng_c, seed_c, ab_c = s._streams(6)
+    # same index -> same derived render seed and same first draws (dist + aberration)
     assert seed_a == seed_b
     assert rng_a.random() == rng_b.random()
+    assert ab_a.random() == ab_b.random()
     # different index -> different render seed
     assert seed_a != seed_c
     # different master seed -> different render seed for the same index
     assert _sampler(master_seed=999)._streams(5)[1] != seed_a
 
 
+def test_streams_preserve_legacy_dist_draws():
+    # Regression guard: bumping spawn(2)->spawn(3) must not change the dist stream or
+    # render seed for a fixed (master_seed, index). Values come from the spawn(2) form.
+    import numpy as np
+
+    s = _sampler(master_seed=123)
+    rng, seed, _ = s._streams(5)
+    dist_ss, render_ss = np.random.SeedSequence([123, 5]).spawn(2)
+    assert seed == int(render_ss.generate_state(1, dtype=np.uint32)[0])
+    assert rng.random() == np.random.default_rng(dist_ss).random()
+
+
+def test_draw_aberration_within_ranges_and_deterministic():
+    s = _sampler()
+    _, _, ab = s._streams(0)
+    for _ in range(200):
+        defocus, mag, azimuth = s._draw_aberration(ab)
+        assert -s.cfg.defocus_A_max <= defocus <= s.cfg.defocus_A_max
+        assert 0.0 <= mag <= s.cfg.astig_a1_A_max
+        assert 0.0 <= azimuth < math.pi
+    # determinism by index
+    _, _, ab1 = s._streams(7)
+    _, _, ab2 = s._streams(7)
+    assert s._draw_aberration(ab1) == s._draw_aberration(ab2)
+
+
+def test_sample_condition_carries_aberration():
+    s = _sampler()
+    cond, _ = s.sample(3, max_fov_A=80.0)
+    assert -s.cfg.defocus_A_max <= cond.defocus_A <= s.cfg.defocus_A_max
+    assert 0.0 <= cond.astig_a1_A <= s.cfg.astig_a1_A_max
+    assert 0.0 <= cond.astig_a1_azimuth_rad < math.pi
+    cond2, _ = s.sample(3, max_fov_A=80.0)
+    assert (cond.defocus_A, cond.astig_a1_A, cond.astig_a1_azimuth_rad) == (
+        cond2.defocus_A, cond2.astig_a1_A, cond2.astig_a1_azimuth_rad
+    )
+
+
 def test_draw_condition_is_a_preset():
     s = _sampler()
-    rng, _ = s._streams(0)
+    rng, _, _ = s._streams(0)
     seen = set()
     for _ in range(100):
         cond = s._draw_condition(rng)
@@ -52,7 +91,7 @@ def test_draw_condition_is_a_preset():
 
 def test_draw_noise_within_ranges():
     s = _sampler()
-    rng, _ = s._streams(0)
+    rng, _, _ = s._streams(0)
     for _ in range(100):
         n = s._draw_noise(rng)
         assert isinstance(n, NoiseSpec)
@@ -65,7 +104,7 @@ def test_draw_noise_within_ranges():
 
 def test_draw_background_families_and_params():
     s = _sampler()
-    rng, _ = s._streams(0)
+    rng, _, _ = s._streams(0)
     seen = set()
     for _ in range(300):
         bg = s._draw_background(rng)
@@ -82,7 +121,7 @@ def test_draw_background_families_and_params():
 
 def test_rotation_choices_filtered_to_feasible():
     s = _sampler()
-    rng, _ = s._streams(0)
+    rng, _, _ = s._streams(0)
     # max_fov 30 with smallest fov 8: 8*(|cos|+|sin|) + 12 <= 30 -> factor <= 2.25.
     # All rotations 0..90 satisfy this (max factor ~1.414), so all are allowed.
     rots = {s._draw_rotation(rng, 30.0) for _ in range(200)}
@@ -92,7 +131,7 @@ def test_rotation_choices_filtered_to_feasible():
 
 def test_too_small_structure_raises():
     s = _sampler()
-    rng, _ = s._streams(0)
+    rng, _, _ = s._streams(0)
     # smallest fov 8: even at 0 deg, 8*1 + 12 = 20 > 10 -> no feasible rotation.
     with pytest.raises(ValueError):
         s._draw_rotation(rng, 10.0)
@@ -100,7 +139,7 @@ def test_too_small_structure_raises():
 
 def test_draw_scale_respects_aliasing_and_fov():
     s = _sampler()
-    rng, _ = s._streams(0)
+    rng, _, _ = s._streams(0)
     cond = IMAGING_CONDITIONS["cond1"]
     for _ in range(100):
         fov_A, pixel_size_A, output_size = s._draw_scale(rng, cond, 0.0, 80.0)
@@ -113,7 +152,7 @@ def test_draw_scale_respects_aliasing_and_fov():
 
 def test_draw_offset_within_slack():
     s = _sampler()
-    rng, _ = s._streams(0)
+    rng, _, _ = s._streams(0)
     fov_A, rotation_deg, max_fov_A = 10.0, 30.0, 40.0
     factor = abs(math.cos(math.radians(rotation_deg))) + abs(math.sin(math.radians(rotation_deg)))
     slack = max((max_fov_A - fov_A * factor) / 2.0 - 6.0, 0.0)
@@ -126,7 +165,7 @@ def test_draw_offset_within_slack():
 
 def test_draw_scale_raises_when_no_fov_fits():
     s = _sampler()
-    rng, _ = s._streams(0)
+    rng, _, _ = s._streams(0)
     cond = IMAGING_CONDITIONS["cond1"]
     # at 0 deg even the smallest FOV (8) needs 8 + 2*6 = 20 A > 11 -> no candidate
     with pytest.raises(ValueError):
@@ -138,7 +177,7 @@ def test_draw_scale_raises_when_aliasing_below_min_pixel():
     cfg.pixel_size_A_min = 0.5  # coarser than any condition's aliasing limit (~0.35 A)
     cfg.pixel_size_A_max = 0.6
     s = AugmentationSampler(cfg, master_seed=0)
-    rng, _ = s._streams(0)
+    rng, _, _ = s._streams(0)
     with pytest.raises(ValueError):
         s._draw_scale(rng, IMAGING_CONDITIONS["cond1"], 0.0, 80.0)
 

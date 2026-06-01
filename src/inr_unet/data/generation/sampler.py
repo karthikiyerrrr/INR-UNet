@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -42,12 +43,19 @@ class AugmentationSampler:
         w = np.array([float(cfg.bg_weights[k]) for k in self._bg_kinds])
         self._bg_weights = w / w.sum()
 
-    def _streams(self, index: int) -> tuple[np.random.Generator, int]:
-        """Derive a distribution RNG and a decorrelated render seed for one draw."""
-        dist_ss, render_ss = np.random.SeedSequence([self.master_seed, int(index)]).spawn(2)
+    def _streams(self, index: int) -> tuple[np.random.Generator, int, np.random.Generator]:
+        """Derive a distribution RNG, a render seed, and an independent aberration RNG.
+
+        spawn(3) leaves the first two children bitwise-identical to the previous spawn(2),
+        so every existing draw value is preserved; the third child feeds aberration draws.
+        """
+        dist_ss, render_ss, aberr_ss = np.random.SeedSequence(
+            [self.master_seed, int(index)]
+        ).spawn(3)
         rng = np.random.default_rng(dist_ss)
         render_seed = int(render_ss.generate_state(1, dtype=np.uint32)[0])
-        return rng, render_seed
+        aberr_rng = np.random.default_rng(aberr_ss)
+        return rng, render_seed, aberr_rng
 
     def _draw_condition(self, rng: np.random.Generator) -> ImagingCondition:
         name = self.cfg.conditions[int(rng.integers(len(self.cfg.conditions)))]
@@ -64,6 +72,17 @@ class AugmentationSampler:
             scan_beta=float(rng.uniform(self.cfg.scan_beta_min, self.cfg.scan_beta_max)),
             scan_phi0=float(rng.uniform(0.0, 2.0 * math.pi)),
         )
+
+    def _draw_aberration(self, rng: np.random.Generator) -> tuple[float, float, float]:
+        """Draw (defocus_A, astig_a1_A, astig_a1_azimuth_rad) for one render.
+
+        Defocus is signed (over/under focus); astigmatism is only visible with nonzero
+        defocus. Azimuth spans [0, pi) because 2-fold astigmatism has period pi.
+        """
+        defocus = float(rng.uniform(-self.cfg.defocus_A_max, self.cfg.defocus_A_max))
+        mag = float(rng.uniform(0.0, self.cfg.astig_a1_A_max))
+        azimuth = float(rng.uniform(0.0, math.pi))
+        return defocus, mag, azimuth
 
     def _draw_background(self, rng: np.random.Generator) -> BackgroundSpec:
         kind = self._bg_kinds[int(rng.choice(len(self._bg_kinds), p=self._bg_weights))]
@@ -145,8 +164,15 @@ class AugmentationSampler:
 
         Raises ValueError if no FOV/rotation fits ``max_fov_A`` with margin.
         """
-        rng, render_seed = self._streams(index)
+        rng, render_seed, aberr_rng = self._streams(index)
         condition = self._draw_condition(rng)
+        defocus, astig_mag, astig_az = self._draw_aberration(aberr_rng)
+        condition = replace(
+            condition,
+            defocus_A=defocus,
+            astig_a1_A=astig_mag,
+            astig_a1_azimuth_rad=astig_az,
+        )
         rotation_deg = self._draw_rotation(rng, max_fov_A)
         fov_A, pixel_size_A, output_size = self._draw_scale(
             rng, condition, rotation_deg, max_fov_A
