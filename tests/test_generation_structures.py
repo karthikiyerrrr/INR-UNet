@@ -72,6 +72,54 @@ def test_renderparams_defaults():
     assert p.position_offset_A.shape == (2,)
 
 
+def test_columnlist_accepts_optional_lattice_basis():
+    import torch
+
+    from inr_unet.data.generation.structures import ColumnList, Grid
+
+    basis = torch.tensor([[3.9, 0.0], [0.0, 3.9]])
+    cols = ColumnList(
+        positions_A=torch.zeros(1, 2),
+        z=torch.tensor([78.0]),
+        count=torch.tensor([1.0]),
+        fov_A=60.0,
+        lattice_basis_A=basis,
+    )
+    cols.validate(Grid(output_size=10, pixel_size_A=1.0))
+    assert torch.equal(cols.lattice_basis_A, basis)
+
+
+def test_columnlist_defaults_lattice_basis_to_none():
+    import torch
+
+    from inr_unet.data.generation.structures import ColumnList
+
+    cols = ColumnList(
+        positions_A=torch.zeros(0, 2),
+        z=torch.zeros(0),
+        count=torch.zeros(0),
+        fov_A=60.0,
+    )
+    assert cols.lattice_basis_A is None
+
+
+def test_columnlist_rejects_misshaped_lattice_basis():
+    import pytest
+    import torch
+
+    from inr_unet.data.generation.structures import ColumnList, Grid
+
+    cols = ColumnList(
+        positions_A=torch.zeros(1, 2),
+        z=torch.tensor([78.0]),
+        count=torch.tensor([1.0]),
+        fov_A=60.0,
+        lattice_basis_A=torch.zeros(3, 2),
+    )
+    with pytest.raises(ValueError):
+        cols.validate(Grid(output_size=10, pixel_size_A=1.0))
+
+
 def test_renderer_is_implemented():
     from omegaconf import OmegaConf
 

@@ -40,12 +40,15 @@ class ColumnList:
     """Projected atomic columns from upstream CIF/zone-axis tooling.
 
     positions_A[:, 0] = x (horizontal), positions_A[:, 1] = y (vertical), origin at FOV corner.
+    lattice_basis_A, when present, holds the two in-plane lattice vectors (rows, Angstroms)
+    for the projected structure; downstream occupancy uses it to align facet edges.
     """
 
     positions_A: torch.Tensor  # [N, 2]
     z: torch.Tensor            # [N]
     count: torch.Tensor        # [N]
     fov_A: float
+    lattice_basis_A: torch.Tensor | None = None  # [2, 2] rows = in-plane lattice vectors (A)
 
     def validate(self, grid: Grid) -> None:
         n = self.positions_A.shape[0]
@@ -58,6 +61,10 @@ class ColumnList:
         if self.fov_A < grid.extent_A - 1e-6:
             raise ValueError(
                 f"fov_A={self.fov_A} too small for render extent {grid.extent_A} A"
+            )
+        if self.lattice_basis_A is not None and tuple(self.lattice_basis_A.shape) != (2, 2):
+            raise ValueError(
+                f"lattice_basis_A must be [2, 2], got {tuple(self.lattice_basis_A.shape)}"
             )
 
 
