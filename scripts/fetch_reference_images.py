@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import urllib.request
 from pathlib import Path
 
@@ -28,6 +29,10 @@ def _list_images() -> list[dict]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--count", type=int, default=50, help="number of images to fetch")
+    parser.add_argument("--seed", type=int, default=0, help="seed for the random sample")
+    parser.add_argument(
+        "--first", action="store_true", help="take the first N instead of a random sample"
+    )
     parser.add_argument("--out", type=Path, default=Path("data/reference"))
     args = parser.parse_args()
 
@@ -35,7 +40,12 @@ def main() -> None:
     images = _list_images()
     if not images:
         raise SystemExit(f"No images found at {_API}")
-    selected = images[: args.count]
+    count = min(args.count, len(images))
+    if args.first:
+        selected = images[:count]
+    else:
+        selected = random.Random(args.seed).sample(images, count)  # noqa: S311 (not cryptographic)
+        selected.sort(key=lambda e: e["name"])
     print(f"Found {len(images)} images; downloading {len(selected)} to {args.out}/")
     for entry in selected:
         dest = args.out / entry["name"]
