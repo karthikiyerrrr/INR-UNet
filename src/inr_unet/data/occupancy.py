@@ -10,8 +10,15 @@ The FiniteSupportProvider (below) applies one region per scene at a seeded place
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
+
+from inr_unet.data.generation.structures import ColumnList
+
+if TYPE_CHECKING:
+    from inr_unet.data.providers import ColumnListProvider
 
 # Decorrelated RNG stream for occupancy (distinct from scene/crop/query/cif salts).
 _SUPPORT_SALT = 4099
@@ -102,3 +109,29 @@ def support_mask(
     else:
         mask = _blob_mask(xy, center, radius, occ.blob_roughness, rng)
     return torch.as_tensor(mask, dtype=torch.bool)
+
+
+class FiniteSupportProvider:
+    """Wraps any ColumnListProvider and clips each scene's columns to a support region."""
+
+    def __init__(self, inner: ColumnListProvider, occ, master_seed: int) -> None:
+        self.inner = inner
+        self.occ = occ
+        self.master_seed = int(master_seed)
+
+    def __len__(self) -> int:
+        return len(self.inner)
+
+    def get(self, scene_idx: int) -> ColumnList:
+        cols = self.inner.get(scene_idx)
+        rng = np.random.default_rng(
+            np.random.SeedSequence([self.master_seed, int(scene_idx), _SUPPORT_SALT])
+        )
+        mask = support_mask(cols.positions_A, cols.fov_A, cols.lattice_basis_A, self.occ, rng)
+        return ColumnList(
+            positions_A=cols.positions_A[mask],
+            z=cols.z[mask],
+            count=cols.count[mask],
+            fov_A=cols.fov_A,
+            lattice_basis_A=cols.lattice_basis_A,
+        )

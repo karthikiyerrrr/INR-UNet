@@ -63,3 +63,45 @@ def test_deterministic_for_same_seed():
     m1 = support_mask(pos, 60.0, basis, _Occ("facet_polygon"), np.random.default_rng(7))
     m2 = support_mask(pos, 60.0, basis, _Occ("facet_polygon"), np.random.default_rng(7))
     assert torch.equal(m1, m2)
+
+
+def test_finite_support_provider_clips_columns():
+    from inr_unet.config import OccupancyConfig, SyntheticDatasetConfig
+    from inr_unet.data.occupancy import FiniteSupportProvider
+    from inr_unet.data.providers import SyntheticLatticeProvider
+
+    inner = SyntheticLatticeProvider(SyntheticDatasetConfig(n_scenes=4), master_seed=0)
+    occ = OccupancyConfig(mode="facet_polygon", support_frac_min=0.4, support_frac_max=0.4)
+    wrapped = FiniteSupportProvider(inner, occ, master_seed=0)
+
+    full = inner.get(0)
+    clipped = wrapped.get(0)
+    assert clipped.positions_A.shape[0] < full.positions_A.shape[0]
+    assert clipped.positions_A.shape[0] > 0
+    assert clipped.fov_A == full.fov_A
+    assert clipped.lattice_basis_A is not None
+    assert clipped.z.shape[0] == clipped.positions_A.shape[0]
+
+
+def test_finite_support_provider_is_deterministic():
+    from inr_unet.config import OccupancyConfig, SyntheticDatasetConfig
+    from inr_unet.data.occupancy import FiniteSupportProvider
+    from inr_unet.data.providers import SyntheticLatticeProvider
+
+    inner = SyntheticLatticeProvider(SyntheticDatasetConfig(n_scenes=4), master_seed=0)
+    occ = OccupancyConfig(mode="blob")
+    a = FiniteSupportProvider(inner, occ, 0).get(1)
+    b = FiniteSupportProvider(inner, occ, 0).get(1)
+    assert torch.equal(a.positions_A, b.positions_A)
+
+
+def test_finite_support_provider_full_is_identity():
+    from inr_unet.config import OccupancyConfig, SyntheticDatasetConfig
+    from inr_unet.data.occupancy import FiniteSupportProvider
+    from inr_unet.data.providers import ColumnListProvider, SyntheticLatticeProvider
+
+    inner = SyntheticLatticeProvider(SyntheticDatasetConfig(n_scenes=4), master_seed=0)
+    wrapped = FiniteSupportProvider(inner, OccupancyConfig(mode="full"), 0)
+    assert isinstance(wrapped, ColumnListProvider)
+    assert torch.equal(wrapped.get(0).positions_A, inner.get(0).positions_A)
+    assert len(wrapped) == len(inner)
