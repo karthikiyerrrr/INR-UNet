@@ -1,0 +1,48 @@
+"""Pure visual-calibration statistics for comparing synthetic vs real STEM images.
+
+No I/O, no plotting: each function maps a single [H, W] image tensor to summary arrays
+the explorer notebook overlays against the real reference set.
+"""
+
+from __future__ import annotations
+
+import torch
+
+
+def intensity_histogram(
+    image: torch.Tensor, bins: int = 64
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Histogram of pixel intensities over the image's own [min, max] range.
+
+    Returns (counts [bins], edges [bins + 1]). Counts sum to the pixel count.
+    """
+    flat = image.flatten()
+    lo, hi = float(flat.min()), float(flat.max())
+    if hi <= lo:  # constant image: put all mass in the first bin over a unit range
+        hi = lo + 1.0
+    counts = torch.histc(flat, bins=bins, min=lo, max=hi)
+    edges = torch.linspace(lo, hi, bins + 1)
+    return counts, edges
+
+
+def radial_power_spectrum(image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Azimuthally-averaged power spectrum |FFT|**2 vs integer radial frequency bin.
+
+    Returns (freq [R + 1], power [R + 1]) where freq is the radius in cycles-per-image
+    (pixels in the shifted spectrum from the DC center). The DC term sits at index 0.
+    """
+    spec = torch.fft.fftshift(torch.fft.fft2(image))
+    power = spec.real**2 + spec.imag**2
+    h, w = image.shape
+    ax_y = torch.arange(h, dtype=torch.float32) - h // 2
+    ax_x = torch.arange(w, dtype=torch.float32) - w // 2
+    yy, xx = torch.meshgrid(ax_y, ax_x, indexing="ij")
+    r = torch.sqrt(yy**2 + xx**2).round().to(torch.long).flatten()
+    r_max = int(r.max())
+    radial = torch.zeros(r_max + 1, dtype=power.dtype)
+    counts = torch.zeros(r_max + 1, dtype=power.dtype)
+    radial.index_add_(0, r, power.flatten())
+    counts.index_add_(0, r, torch.ones_like(power.flatten()))
+    radial = radial / counts.clamp(min=1.0)
+    freq = torch.arange(r_max + 1, dtype=torch.float32)
+    return freq, radial
