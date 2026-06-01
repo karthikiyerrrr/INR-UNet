@@ -46,15 +46,17 @@ def _build_lattice(
     gi, gj = torch.meshgrid(ix, ix, indexing="ij")
     parity = ((gi + gj) % 2).reshape(-1).bool()
     z = torch.where(parity, torch.full((n,), float(z_a)), torch.full((n,), float(z_b)))
+    theta = math.radians(angle_deg)
+    c, s = math.cos(theta), math.sin(theta)
+    rot = torch.tensor([[c, -s], [s, c]], dtype=pos.dtype)
     if n > 0 and angle_deg != 0.0:
-        theta = math.radians(angle_deg)
         center = fov_A / 2.0
-        rot = torch.tensor(
-            [[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]],
-            dtype=pos.dtype,
-        )
         pos = (pos - center) @ rot.T + center
-    return ColumnList(positions_A=pos, z=z, count=torch.ones(n), fov_A=float(fov_A))
+    # in-plane lattice vectors (spacing_A along x and y) rotated by the same angle
+    basis = (rot @ torch.tensor([[spacing_A, 0.0], [0.0, spacing_A]], dtype=pos.dtype).T).T
+    return ColumnList(
+        positions_A=pos, z=z, count=torch.ones(n), fov_A=float(fov_A), lattice_basis_A=basis
+    )
 
 
 class SyntheticLatticeProvider:

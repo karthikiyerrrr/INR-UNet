@@ -62,3 +62,14 @@ def test_out_of_range_raises():
 
 def test_satisfies_protocol():
     assert isinstance(_provider(), ColumnListProvider)
+
+
+def test_synthetic_provider_populates_lattice_basis():
+    p = _provider()
+    scene = p.get(0)
+    assert scene.lattice_basis_A is not None
+    assert tuple(scene.lattice_basis_A.shape) == (2, 2)
+    # rows should have length ~ the lattice spacing (2-4 A band)
+    import torch
+    lengths = torch.linalg.norm(scene.lattice_basis_A, dim=1)
+    assert (lengths >= 2.0 - 1e-3).all() and (lengths <= 4.0 + 1e-3).all()
