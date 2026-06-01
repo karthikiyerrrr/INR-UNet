@@ -45,6 +45,35 @@ class SyntheticDatasetConfig:
     target_pixel_size_A_min: float = 0.05
     target_pixel_size_A_max: float = 0.30
     master_seed: int = 0
+    # finite-particle crop control (engaged only when occupancy.mode != "full")
+    min_columns_in_crop: int = 1
+    empty_crop_fraction: float = 0.15
+    crop_redraw_cap: int = 16
+
+
+@dataclass
+class CIFConfig:
+    manifest_path: str = "src/inr_unet/data/cif/manifest.yaml"
+    group_tol_A: float = 0.4
+    scene_fov_A_min: float = 60.0
+    scene_fov_A_max: float = 80.0
+    rotation_jitter_deg: float = 5.0
+
+
+@dataclass
+class OccupancyConfig:
+    mode: str = "full"  # "full" | "facet_polygon" | "blob" | "mix"
+    mix_weights: dict[str, float] = field(
+        default_factory=lambda: {"facet_polygon": 1.0, "blob": 1.0, "full": 1.0}
+    )
+    support_frac_min: float = 0.3
+    support_frac_max: float = 0.9
+    n_facets_min: int = 4
+    n_facets_max: int = 6
+    facet_offset_jitter_frac: float = 0.15
+    half_plane_prob: float = 0.15
+    edge_clip_prob: float = 0.3
+    blob_roughness: float = 0.2
 
 
 @dataclass
@@ -53,7 +82,10 @@ class DataConfig:
     image_size: int = 256
     batch_size: int = 8
     num_workers: int = 4
+    provider: str = "synthetic"  # "synthetic" | "cif"
     synthetic: SyntheticDatasetConfig = field(default_factory=SyntheticDatasetConfig)
+    cif: CIFConfig = field(default_factory=CIFConfig)
+    occupancy: OccupancyConfig = field(default_factory=OccupancyConfig)
 
 
 @dataclass

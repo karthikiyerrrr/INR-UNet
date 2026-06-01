@@ -72,3 +72,25 @@ def test_default_yaml_has_synthetic():
     assert cfg.data.synthetic.n_scenes == 64
     assert cfg.data.synthetic.crop_size == 48
     assert cfg.data.synthetic.sample_q == 2304
+
+
+def test_data_config_has_provider_cif_occupancy_defaults():
+    from omegaconf import OmegaConf
+
+    from inr_unet.config import ExperimentConfig
+
+    cfg = OmegaConf.structured(ExperimentConfig)
+    assert cfg.data.provider == "synthetic"
+    assert cfg.data.occupancy.mode == "full"
+    assert cfg.data.cif.group_tol_A == 0.4
+    assert cfg.data.synthetic.min_columns_in_crop == 1
+    assert 0.0 <= cfg.data.synthetic.empty_crop_fraction <= 1.0
+    assert cfg.data.synthetic.crop_redraw_cap >= 1
+
+
+def test_default_yaml_merges_with_new_fields():
+    from inr_unet.config import load_config
+
+    cfg = load_config("configs/default.yaml")
+    assert cfg.data.provider in ("synthetic", "cif")
+    assert cfg.data.occupancy.mode in ("full", "facet_polygon", "blob", "mix")

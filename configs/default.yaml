@@ -20,6 +20,7 @@ data:
   image_size: 256
   batch_size: 8
   num_workers: 4
+  provider: synthetic
   synthetic:
     n_scenes: 64
     draws_per_scene: 16
@@ -29,6 +30,29 @@ data:
     target_pixel_size_A_min: 0.05
     target_pixel_size_A_max: 0.30
     master_seed: 0
+    min_columns_in_crop: 1
+    empty_crop_fraction: 0.15
+    crop_redraw_cap: 16
+  cif:
+    manifest_path: src/inr_unet/data/cif/manifest.yaml
+    group_tol_A: 0.4
+    scene_fov_A_min: 60.0
+    scene_fov_A_max: 80.0
+    rotation_jitter_deg: 5.0
+  occupancy:
+    mode: full
+    mix_weights:
+      facet_polygon: 1.0
+      blob: 1.0
+      full: 1.0
+    support_frac_min: 0.3
+    support_frac_max: 0.9
+    n_facets_min: 4
+    n_facets_max: 6
+    facet_offset_jitter_frac: 0.15
+    half_plane_prob: 0.15
+    edge_clip_prob: 0.3
+    blob_roughness: 0.2
 train:
   epochs: 100
   lr: 1.0e-4
