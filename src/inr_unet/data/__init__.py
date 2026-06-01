@@ -10,7 +10,9 @@ from inr_unet.data.generation import (
     RenderParams,
     TEMRenderer,
 )
-from inr_unet.data.providers import ColumnListProvider, SyntheticLatticeProvider
+from inr_unet.data.occupancy import FiniteSupportProvider
+from inr_unet.data.projection import project_structure
+from inr_unet.data.providers import CIFProvider, ColumnListProvider, SyntheticLatticeProvider
 from inr_unet.data.render_source import RenderedSample, SyntheticRenderSource
 from inr_unet.data.transforms import Normalize
 
@@ -21,6 +23,9 @@ __all__ = [
     "RenderedSample",
     "ColumnListProvider",
     "SyntheticLatticeProvider",
+    "CIFProvider",
+    "FiniteSupportProvider",
+    "project_structure",
     "AugmentationSampler",
     "TEMRenderer",
     "ColumnList",

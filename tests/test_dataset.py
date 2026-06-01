@@ -81,3 +81,29 @@ def test_liif_gt_ties_to_coordinates():
     col = s.positions_A[0]
     val = ds.label_field.values_at(s.positions_A, s.radii_A, col[None, :])
     assert float(val[0]) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_stem_dataset_with_cif_and_occupancy():
+    from omegaconf import OmegaConf
+
+    from inr_unet.config import ExperimentConfig
+    from inr_unet.data import STEMSegDataset
+
+    cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.provider = "cif"
+    cfg.data.occupancy.mode = "facet_polygon"
+    cfg.data.synthetic.n_scenes = 2
+    cfg.data.synthetic.draws_per_scene = 2
+    ds = STEMSegDataset(cfg)
+    image, mask = ds[0]
+    s = cfg.data.synthetic.crop_size
+    assert image.shape == (1, s, s)
+    assert mask.shape == (1, s, s)
+
+
+def test_data_package_exports_new_symbols():
+    import inr_unet.data as d
+
+    assert hasattr(d, "CIFProvider")
+    assert hasattr(d, "FiniteSupportProvider")
+    assert hasattr(d, "project_structure")
