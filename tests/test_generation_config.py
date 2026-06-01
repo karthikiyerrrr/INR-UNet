@@ -94,3 +94,17 @@ def test_default_yaml_merges_with_new_fields():
     cfg = load_config("configs/default.yaml")
     assert cfg.data.provider in ("synthetic", "cif")
     assert cfg.data.occupancy.mode in ("full", "facet_polygon", "blob", "mix")
+
+
+def test_sampler_aberration_knobs_present_and_load():
+    from omegaconf import OmegaConf
+
+    from inr_unet.config import SamplerConfig, load_config
+
+    cfg = OmegaConf.structured(SamplerConfig)
+    assert cfg.defocus_A_max == 40.0
+    assert cfg.astig_a1_A_max == 40.0
+
+    merged = load_config("configs/default.yaml")
+    assert merged.generation.sampler.defocus_A_max == 40.0
+    assert merged.generation.sampler.astig_a1_A_max == 40.0
