@@ -13,28 +13,35 @@ def _():
     from plotly.subplots import make_subplots
     from omegaconf import OmegaConf
 
-    from inr_unet.config import ExperimentConfig, SamplerConfig
+    from inr_unet.config import ExperimentConfig, OccupancyConfig, SamplerConfig
     from inr_unet.data import (
         IMAGING_CONDITIONS,
         AugmentationSampler,
+        CIFProvider,
         ColumnList,
+        FiniteSupportProvider,
         LIIFSegDataset,
         RenderParams,
         STEMSegDataset,
+        SyntheticRenderSource,
         TEMRenderer,
+        project_structure,
     )
     from inr_unet.data.generation.structures import BackgroundSpec, NoiseSpec
     from inr_unet.data.generation.labels import column_radius
     from inr_unet.data.generation.psf import wavelength_A
+    from inr_unet.data.occupancy import support_mask
 
     return (
         AugmentationSampler,
         BackgroundSpec,
+        CIFProvider,
         ColumnList,
         ExperimentConfig,
         IMAGING_CONDITIONS,
         LIIFSegDataset,
         NoiseSpec,
+        OccupancyConfig,
         OmegaConf,
         RenderParams,
         STEMSegDataset,
@@ -44,6 +51,8 @@ def _():
         go,
         make_subplots,
         mo,
+        np,
+        support_mask,
         torch,
         wavelength_A,
     )
@@ -536,6 +545,233 @@ def _(ds_S, ds_crop_idx, ds_pad_idx, go, liif_ds, make_subplots):
     liif_fig.update_annotations(font_size=11)
     liif_fig.update_layout(height=360, width=900, margin=dict(l=8, r=8, t=34, b=8))
     liif_fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## CIF ingestion + crystallographic occupancy
+
+    Real crystal structures (bundled CIFs) projected along a **zone axis** become a
+    `ColumnList`: atoms stacking along the beam collapse into 2D columns, with an
+    **effective Z** so `count * Z**n` matches the true ADF power-sum `sum(Z_i**n)`
+    (pure columns keep their real atomic number). The projection also exports the
+    **in-plane lattice basis** -- the two repeat vectors faceted shapes align to.
+
+    Occupancy then clips a frame-filling lattice to a **finite particle**:
+    `facet_polygon` (convex intersection of half-planes normal to low-index lattice
+    directions -- facet-plausible, *not* a Wulff shape), `blob` (isotropic disk with
+    smooth roughness), and a single-facet half-plane = a straight crystal edge.
+    Color = atomic number Z.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    cif_seed = mo.ui.slider(0, 20, value=0, step=1, label="master seed")
+    cif_support = mo.ui.slider(0.25, 0.85, value=0.5, step=0.05, label="support size (frac of FOV)")
+    cif_occ_idx = mo.ui.slider(0, 9, value=4, step=1, label="occupancy demo scene")
+    mo.hstack([cif_seed, cif_support, cif_occ_idx], justify="start", gap=2)
+    return cif_occ_idx, cif_seed, cif_support
+
+
+@app.cell
+def _(CIFProvider, ExperimentConfig, OmegaConf, cif_seed, mo):
+    cif_cfg = OmegaConf.structured(ExperimentConfig)
+    cif_prov = CIFProvider(
+        manifest_path=str(cif_cfg.data.cif.manifest_path),
+        n_scenes=10,
+        master_seed=int(cif_seed.value),
+        n_exponent=float(cif_cfg.generation.sampler.z_exponent),
+        group_tol_A=float(cif_cfg.data.cif.group_tol_A),
+        scene_fov_A=(float(cif_cfg.data.cif.scene_fov_A_min), float(cif_cfg.data.cif.scene_fov_A_max)),
+        rotation_jitter_deg=float(cif_cfg.data.cif.rotation_jitter_deg),
+    )
+    import yaml as _yaml
+    import pathlib as _pl
+    _entries = _yaml.safe_load(_pl.Path(cif_cfg.data.cif.manifest_path).read_text())["entries"]
+    cif_labels = [
+        "{}[{}]".format(e["cif"].replace(".cif", ""), "".join(str(x) for x in e["zone_axis"]))
+        for e in _entries
+    ]
+    cif_scenes = [cif_prov.get(_i) for _i in range(10)]
+    mo.md(
+        "Projected **{}** bundled structures &middot; {}-{} columns/scene &middot; "
+        "effective-Z reduction with n = {}".format(
+            len(cif_scenes),
+            min(s.positions_A.shape[0] for s in cif_scenes),
+            max(s.positions_A.shape[0] for s in cif_scenes),
+            cif_cfg.generation.sampler.z_exponent,
+        )
+    )
+    return cif_labels, cif_scenes
+
+
+@app.cell(hide_code=True)
+def _(cif_labels, cif_scenes, go, make_subplots, np):
+    cif_gallery = make_subplots(
+        rows=2, cols=5, subplot_titles=cif_labels,
+        horizontal_spacing=0.02, vertical_spacing=0.10,
+    )
+    for _k, _sc in enumerate(cif_scenes):
+        _row, _col = _k // 5 + 1, _k % 5 + 1
+        _p = _sc.positions_A.numpy()
+        cif_gallery.add_trace(
+            go.Scatter(
+                x=_p[:, 0], y=_p[:, 1], mode="markers",
+                marker=dict(size=3.5, color=_sc.z.numpy(), colorscale="Turbo", cmin=0, cmax=80,
+                            showscale=False),
+                showlegend=False,
+            ),
+            row=_row, col=_col,
+        )
+        _o = np.array([_sc.fov_A * 0.1, _sc.fov_A * 0.1])
+        for _vec in _sc.lattice_basis_A.numpy():
+            _e = _o + 3.0 * _vec
+            cif_gallery.add_trace(
+                go.Scatter(x=[_o[0], _e[0]], y=[_o[1], _e[1]], mode="lines",
+                           line=dict(color="#00e5ff", width=2), showlegend=False),
+                row=_row, col=_col,
+            )
+    for _k in range(1, 11):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        _fv = cif_scenes[_k - 1].fov_A
+        cif_gallery.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[0, _fv],
+                                       showticklabels=False, ticks="")
+        cif_gallery.layout[_xk].update(constrain="domain", range=[0, _fv],
+                                       showticklabels=False, ticks="")
+    cif_gallery.update_annotations(font_size=12)
+    cif_gallery.update_layout(height=460, width=980, margin=dict(l=8, r=8, t=30, b=8),
+                              plot_bgcolor="#111", title_text="Projected columns (color = Z), cyan = in-plane lattice basis")
+    cif_gallery
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    OccupancyConfig,
+    OmegaConf,
+    cif_labels,
+    cif_occ_idx,
+    cif_scenes,
+    cif_seed,
+    cif_support,
+    go,
+    make_subplots,
+    np,
+    support_mask,
+):
+    occ_idx = int(cif_occ_idx.value)
+    occ_scene = cif_scenes[occ_idx]
+    occ_frac = float(cif_support.value)
+    occ_modes = ["full", "facet_polygon", "blob"]
+    occ_masks = []
+    for _m in occ_modes:
+        _occ = OmegaConf.structured(OccupancyConfig)
+        _occ.mode = _m
+        _occ.support_frac_min = occ_frac
+        _occ.support_frac_max = occ_frac
+        _occ.edge_clip_prob = 0.0
+        _rng = np.random.default_rng(np.random.SeedSequence([int(cif_seed.value), occ_idx, 4099]))
+        occ_masks.append(
+            support_mask(occ_scene.positions_A, occ_scene.fov_A, occ_scene.lattice_basis_A, _occ, _rng).numpy()
+        )
+    occ_fig = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=[f"{_m} ({int(_k.sum())} cols)" for _m, _k in zip(occ_modes, occ_masks)],
+        horizontal_spacing=0.03,
+    )
+    _p = occ_scene.positions_A.numpy()
+    _z = occ_scene.z.numpy()
+    for _c, _mask in enumerate(occ_masks):
+        _out = ~_mask
+        occ_fig.add_trace(
+            go.Scatter(x=_p[_out, 0], y=_p[_out, 1], mode="markers",
+                       marker=dict(size=3, color="#333"), showlegend=False),
+            row=1, col=_c + 1,
+        )
+        occ_fig.add_trace(
+            go.Scatter(x=_p[_mask, 0], y=_p[_mask, 1], mode="markers",
+                       marker=dict(size=4.5, color=_z[_mask], colorscale="Turbo", cmin=0, cmax=80,
+                                   showscale=False),
+                       showlegend=False),
+            row=1, col=_c + 1,
+        )
+    _fv = occ_scene.fov_A
+    for _k in range(1, 4):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        occ_fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[0, _fv],
+                                   showticklabels=False, ticks="")
+        occ_fig.layout[_xk].update(constrain="domain", range=[0, _fv],
+                                   showticklabels=False, ticks="")
+    occ_fig.update_annotations(font_size=13)
+    occ_fig.update_layout(height=380, width=980, margin=dict(l=8, r=8, t=34, b=8),
+                          plot_bgcolor="#111",
+                          title_text=f"Occupancy on {cif_labels[occ_idx]} -- kept (color=Z) vs clipped (grey)")
+    occ_fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    ExperimentConfig,
+    OmegaConf,
+    STEMSegDataset,
+    cif_seed,
+    cif_support,
+    go,
+    make_subplots,
+):
+    e2e_cfg = OmegaConf.structured(ExperimentConfig)
+    e2e_cfg.data.provider = "cif"
+    e2e_cfg.data.occupancy.mode = "facet_polygon"
+    e2e_cfg.data.occupancy.support_frac_min = float(cif_support.value)
+    e2e_cfg.data.occupancy.support_frac_max = float(cif_support.value)
+    e2e_cfg.data.synthetic.n_scenes = 10
+    e2e_cfg.data.synthetic.draws_per_scene = 3
+    e2e_cfg.data.synthetic.master_seed = int(cif_seed.value)
+    e2e_ds = STEMSegDataset(e2e_cfg)
+    e2e_S = e2e_ds.source.crop_size
+    e2e_show = [0, 12, 21, 3]
+    e2e_titles = []
+    for _i in e2e_show:
+        _s = e2e_ds.source.get(_i)
+        e2e_titles.append(f"#{_i} input ({_s.positions_A.shape[0]} cols)")
+    e2e_titles += [f"#{_i} label" for _i in e2e_show]
+    e2e_fig = make_subplots(rows=2, cols=len(e2e_show), subplot_titles=e2e_titles,
+                            horizontal_spacing=0.02, vertical_spacing=0.12)
+    for _c, _i in enumerate(e2e_show):
+        _img, _mask = e2e_ds[_i]
+        _s = e2e_ds.source.get(_i)
+        _ppx = _s.positions_A.numpy() / _s.input_pixel_size_A
+        _in = (_ppx[:, 0] >= 0) & (_ppx[:, 0] < e2e_S) & (_ppx[:, 1] >= 0) & (_ppx[:, 1] < e2e_S)
+        e2e_fig.add_trace(go.Heatmap(z=_img[0].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
+        e2e_fig.add_trace(
+            go.Scatter(x=_ppx[_in, 0], y=_ppx[_in, 1], mode="markers",
+                       marker=dict(symbol="cross-thin", size=6, color="#ff3b3b", line=dict(width=1.2, color="#ff3b3b")),
+                       showlegend=False),
+            row=1, col=_c + 1,
+        )
+        e2e_fig.add_trace(go.Heatmap(z=_mask[0].numpy(), colorscale="viridis", zmin=0, zmax=1, showscale=False),
+                          row=2, col=_c + 1)
+    _n = 2 * len(e2e_show)
+    for _k in range(1, _n + 1):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        e2e_fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[e2e_S, 0],
+                                   showticklabels=False, ticks="")
+        e2e_fig.layout[_xk].update(constrain="domain", range=[0, e2e_S], showticklabels=False, ticks="")
+    e2e_fig.update_annotations(font_size=12)
+    e2e_fig.update_layout(height=520, width=860, margin=dict(l=8, r=8, t=30, b=8),
+                          title_text="cif + facet_polygon -- finite particles (and #3: a valid empty-vacuum negative)")
+    e2e_fig
     return
 
 
