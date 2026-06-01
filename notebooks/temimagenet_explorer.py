@@ -6,10 +6,14 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import pathlib
+    from dataclasses import replace
+
     import marimo as mo
     import numpy as np
     import torch
     import plotly.graph_objects as go
+    from PIL import Image
     from plotly.subplots import make_subplots
     from omegaconf import OmegaConf
 
@@ -23,13 +27,15 @@ def _():
         LIIFSegDataset,
         RenderParams,
         STEMSegDataset,
+        SyntheticLatticeProvider,
         SyntheticRenderSource,
         TEMRenderer,
         project_structure,
     )
-    from inr_unet.data.generation.structures import BackgroundSpec, NoiseSpec
+    from inr_unet.data.generation.calibration import intensity_histogram, radial_power_spectrum
     from inr_unet.data.generation.labels import column_radius
     from inr_unet.data.generation.psf import wavelength_A
+    from inr_unet.data.generation.structures import BackgroundSpec, ImagingCondition, NoiseSpec
     from inr_unet.data.occupancy import support_mask
 
     return (
@@ -38,7 +44,9 @@ def _():
         CIFProvider,
         ColumnList,
         ExperimentConfig,
+        FiniteSupportProvider,
         IMAGING_CONDITIONS,
+        Image,
         LIIFSegDataset,
         NoiseSpec,
         OccupancyConfig,
@@ -46,12 +54,17 @@ def _():
         RenderParams,
         STEMSegDataset,
         SamplerConfig,
+        SyntheticLatticeProvider,
         TEMRenderer,
         column_radius,
         go,
+        intensity_histogram,
         make_subplots,
         mo,
         np,
+        pathlib,
+        radial_power_spectrum,
+        replace,
         support_mask,
         torch,
         wavelength_A,
@@ -772,6 +785,301 @@ def _(
     e2e_fig.update_layout(height=520, width=860, margin=dict(l=8, r=8, t=30, b=8),
                           title_text="cif + facet_polygon -- finite particles (and #3: a valid empty-vacuum negative)")
     e2e_fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Visual calibration against real S/TEM images
+
+    The forward model is tuned by eye against a sample of real micrographs from the
+    `TEM-ImageNet` set (`data/reference/`, fetched by `scripts/fetch_reference_images.py`).
+    Two checks: a **side-by-side gallery** (do synthetic crops read as the same kind of
+    image?) and **pooled summary statistics** -- an intensity histogram and an
+    azimuthally-averaged power spectrum overlaying the real and synthetic distributions.
+
+    The augmentation sampler now also draws, per render, a **defocus** and a **2-fold
+    astigmatism** (magnitude + azimuth), so columns are no longer perfectly circular.
+    Astigmatism is only visible **away from focus** -- at the mean focal plane the probe
+    is the near-circular disk of least confusion -- which is why a defocus is drawn
+    alongside it. The final panel makes that dependence explicit.
+    """)
+    return
+
+
+@app.cell
+def _(Image, mo, np, pathlib, torch):
+    real_paths = sorted(pathlib.Path("data/reference").glob("*.png"))
+    real_imgs = []
+    for _p in real_paths:
+        _a = np.asarray(Image.open(_p).convert("L"), dtype=np.float32)
+        _t = torch.from_numpy(_a)
+        real_imgs.append((_t - _t.min()) / (_t.max() - _t.min() + 1e-12))
+
+    mo.md(
+        f"Loaded **{len(real_imgs)}** reference images "
+        f"({'x'.join(str(s) for s in real_imgs[0].shape)} px, grayscale, "
+        f"normalized to [0, 1])."
+        if real_imgs
+        else "No reference images found -- run "
+        "`uv run python scripts/fetch_reference_images.py --count 50`."
+    )
+    return (real_imgs,)
+
+
+@app.cell
+def _(
+    AugmentationSampler,
+    CIFProvider,
+    ExperimentConfig,
+    FiniteSupportProvider,
+    OccupancyConfig,
+    OmegaConf,
+    SyntheticLatticeProvider,
+    TEMRenderer,
+    mo,
+    np,
+    real_imgs,
+    replace,
+):
+    # Tuning candidates for configs/default.yaml (Task 8): widen the noisy / low-contrast tail.
+    cal_cfg = OmegaConf.structured(ExperimentConfig)
+    cal_cfg.generation.sampler.n_peak_min = 8.0       # was 30  -- lower dose floor => noisier extreme
+    cal_cfg.generation.sampler.n_bg_frac_max = 0.18   # was 0.05 -- higher dark floor => lower contrast
+    cal_cfg.generation.sampler.bg_constant_c_max = 0.55  # was 0.40 -- stronger flat background
+    cal_cfg.generation.sampler.bg_ramp_c0_max = 0.45     # was 0.30 -- stronger ramp background
+    cal_sampler = AugmentationSampler(cal_cfg.generation.sampler, master_seed=7)
+    cal_renderer = TEMRenderer(cal_cfg.generation)
+
+    # Scene sources mirror the training pipeline: square grids, real CIF lattices, and
+    # occupancy-clipped finite particles (edges + vacuum) -- not just a single grid.
+    _occ_blob = OmegaConf.structured(OccupancyConfig)
+    _occ_blob.mode = "blob"
+    _occ_facet = OmegaConf.structured(OccupancyConfig)
+    _occ_facet.mode = "facet_polygon"
+    _syn = cal_cfg.data.synthetic
+    _cifkw = dict(
+        manifest_path=str(cal_cfg.data.cif.manifest_path), n_scenes=24,
+        n_exponent=float(cal_cfg.generation.sampler.z_exponent),
+        group_tol_A=float(cal_cfg.data.cif.group_tol_A),
+        scene_fov_A=(float(cal_cfg.data.cif.scene_fov_A_min), float(cal_cfg.data.cif.scene_fov_A_max)),
+        rotation_jitter_deg=float(cal_cfg.data.cif.rotation_jitter_deg),
+    )
+    cal_sources = [
+        ("grid", SyntheticLatticeProvider(_syn, 7)),
+        ("grid+occ", FiniteSupportProvider(SyntheticLatticeProvider(_syn, 8), _occ_blob, 8)),
+        ("cif", CIFProvider(master_seed=11, **_cifkw)),
+        ("cif+facet", FiniteSupportProvider(CIFProvider(master_seed=12, **_cifkw), _occ_facet, 12)),
+    ]
+
+    _n_synth = min(len(real_imgs), 24) or 16
+    synth_imgs = []
+    synth_meta = []
+    for _i in range(_n_synth):
+        _kind, _prov = cal_sources[_i % len(cal_sources)]
+        _scene = _prov.get(_i)
+        _cond, _p = cal_sampler.sample(_i, max_fov_A=float(_scene.fov_A))
+        _p = replace(_p, output_size=256, pixel_size_A=float(_scene.fov_A) / 256)
+        synth_imgs.append(cal_renderer.render(_scene, _cond, _p).image)
+        synth_meta.append((_kind, _cond.defocus_A, _cond.astig_a1_A, _p.noise.n_peak))
+
+    _npeak = np.array([_m[3] for _m in synth_meta])
+    mo.md(
+        f"Rendered **{len(synth_imgs)}** synthetic 256x256 micrographs across "
+        f"{len(cal_sources)} scene kinds ({', '.join(k for k, _ in cal_sources)}) -- grids, real "
+        f"lattices, and finite particles. Dose n_peak in [{_npeak.min():.0f}, {_npeak.max():.0f}] "
+        f"(lower = noisier); background and dark-floor ceilings raised for a lower-contrast tail."
+    )
+    return cal_renderer, synth_imgs
+
+
+@app.cell(hide_code=True)
+def _(go, make_subplots, np, real_imgs, synth_imgs):
+    _rng = np.random.default_rng(3)
+    _n = min(5, len(real_imgs), len(synth_imgs))
+    _ri = _rng.choice(len(real_imgs), size=_n, replace=False)
+    _si = _rng.choice(len(synth_imgs), size=_n, replace=False)
+    _fig = make_subplots(
+        rows=2, cols=_n, row_titles=["real", "synthetic"],
+        horizontal_spacing=0.02, vertical_spacing=0.06,
+    )
+    for _c in range(_n):
+        _fig.add_trace(go.Heatmap(z=real_imgs[int(_ri[_c])].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
+        _fig.add_trace(go.Heatmap(z=synth_imgs[int(_si[_c])].numpy(), colorscale="gray", showscale=False), row=2, col=_c + 1)
+    for _k in range(1, 2 * _n + 1):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        _fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", autorange="reversed",
+                                showticklabels=False, ticks="")
+        _fig.layout[_xk].update(constrain="domain", showticklabels=False, ticks="")
+    _fig.update_annotations(font_size=12)
+    _fig.update_layout(height=380, width=860, margin=dict(l=8, r=24, t=22, b=8),
+                       title_text="Reference (top) vs synthetic (bottom)")
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    go,
+    intensity_histogram,
+    make_subplots,
+    radial_power_spectrum,
+    real_imgs,
+    synth_imgs,
+    torch,
+):
+    _rc, _re = intensity_histogram(torch.cat([_x.reshape(-1) for _x in real_imgs]), bins=64)
+    _sc, _se = intensity_histogram(torch.cat([_x.reshape(-1) for _x in synth_imgs]), bins=64)
+    _rd = (_rc / (_rc.sum() * (_re[1] - _re[0]))).numpy()
+    _sd = (_sc / (_sc.sum() * (_se[1] - _se[0]))).numpy()
+    _rcent = ((_re[:-1] + _re[1:]) / 2).numpy()
+    _scent = ((_se[:-1] + _se[1:]) / 2).numpy()
+
+
+    def _avg_ps(_imgs):
+        _ps = [radial_power_spectrum(_x) for _x in _imgs]
+        _L = min(len(_p[1]) for _p in _ps)
+        return _ps[0][0][:_L].numpy(), torch.stack([_p[1][:_L] for _p in _ps]).mean(0).numpy()
+
+
+    _frq, _Pr = _avg_ps(real_imgs)
+    _frs, _Ps = _avg_ps(synth_imgs)
+
+    _fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.12,
+                         subplot_titles=["intensity histogram (density)",
+                                         "radial power spectrum (mean, log)"])
+    _fig.add_trace(go.Scatter(x=_rcent, y=_rd, mode="lines", name="real",
+                              line=dict(color="#1f77b4", shape="hv")), row=1, col=1)
+    _fig.add_trace(go.Scatter(x=_scent, y=_sd, mode="lines", name="synthetic",
+                              line=dict(color="#d62728", shape="hv")), row=1, col=1)
+    _fig.add_trace(go.Scatter(x=_frq[1:], y=_Pr[1:], mode="lines", name="real",
+                              line=dict(color="#1f77b4"), showlegend=False), row=1, col=2)
+    _fig.add_trace(go.Scatter(x=_frs[1:], y=_Ps[1:], mode="lines", name="synthetic",
+                              line=dict(color="#d62728"), showlegend=False), row=1, col=2)
+    _fig.update_yaxes(type="log", row=1, col=2)
+    _fig.update_xaxes(title_text="normalized intensity", row=1, col=1)
+    _fig.update_xaxes(title_text="cycles / image", row=1, col=2)
+    _fig.update_layout(height=340, width=880, margin=dict(l=8, r=8, t=40, b=8),
+                       legend=dict(x=0.46, y=0.98, xanchor="right", yanchor="top"))
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Astigmatism: elliptical columns require defocus
+
+    A single column rendered at the sampler's **maximum** defocus and astigmatism
+    (`defocus_A_max`, `astig_a1_A_max`), sweeping the 2-fold magnitude `A1` (rows) and
+    azimuth (columns) -- i.e. the strongest ellipticity the current defaults allow; most
+    random draws are milder. At **zero defocus** the column stays circular regardless of
+    `A1`; here defocus is held nonzero, so increasing `A1` stretches the column into an
+    ellipse and rotating the azimuth by 90 deg rotates the ellipse by 90 deg. The axis
+    ratio (from the image second moments) is annotated on each panel.
+    """)
+    return
+
+
+@app.cell
+def _(
+    BackgroundSpec,
+    ColumnList,
+    IMAGING_CONDITIONS,
+    NoiseSpec,
+    OmegaConf,
+    RenderParams,
+    SamplerConfig,
+    cal_renderer,
+    mo,
+    np,
+    replace,
+    torch,
+):
+    _scfg = OmegaConf.structured(SamplerConfig)
+    astig_defocus_A = float(_scfg.defocus_A_max)
+    astig_mags = [0.0, _scfg.astig_a1_A_max / 2.0, float(_scfg.astig_a1_A_max)]
+    astig_azimuths = [0.0, np.pi / 2]
+    astig_fov_A, astig_px = 10.0, 0.06
+    astig_cols = ColumnList(
+        positions_A=torch.tensor([[astig_fov_A / 2, astig_fov_A / 2]]),
+        z=torch.tensor([60.0]), count=torch.ones(1), fov_A=astig_fov_A,
+    )
+    astig_base = IMAGING_CONDITIONS["cond1"]
+    astig_params = RenderParams(
+        output_size=int(astig_fov_A / astig_px), pixel_size_A=astig_px, rotation_deg=0.0,
+        z_exponent=1.7, background=BackgroundSpec(kind="constant", params={}),
+        noise=NoiseSpec(n_peak=1e9, scan_freq_cyc_per_row=0.0), seed=0,
+    )
+
+
+    def _axis_ratio(_img):
+        _a = _img.numpy().astype(np.float64)
+        _a = _a - _a.min()
+        _ys, _xs = np.mgrid[0:_a.shape[0], 0:_a.shape[1]]
+        _t = _a.sum()
+        if _t <= 0:
+            return 1.0
+        _my, _mx = (_ys * _a).sum() / _t, (_xs * _a).sum() / _t
+        _cyy = ((_ys - _my) ** 2 * _a).sum() / _t
+        _cxx = ((_xs - _mx) ** 2 * _a).sum() / _t
+        _cxy = ((_xs - _mx) * (_ys - _my) * _a).sum() / _t
+        _w, _ = np.linalg.eigh(np.array([[_cxx, _cxy], [_cxy, _cyy]]))
+        return float((_w.max() / _w.min()) ** 0.5)
+
+
+    astig_panel = []
+    for _mag in astig_mags:
+        _row = []
+        for _az in astig_azimuths:
+            _c = replace(astig_base, defocus_A=astig_defocus_A, astig_a1_A=float(_mag), astig_a1_azimuth_rad=_az)
+            _img = cal_renderer.render(astig_cols, _c, astig_params).image
+            _row.append((_img, _axis_ratio(_img)))
+        astig_panel.append(_row)
+    mo.md(
+        f"Rendered the astigmatism sweep at defocus = {int(astig_defocus_A)} A "
+        f"(sampler max), A1 up to {int(astig_mags[-1])} A."
+    )
+    return astig_azimuths, astig_defocus_A, astig_mags, astig_panel
+
+
+@app.cell(hide_code=True)
+def _(
+    astig_azimuths,
+    astig_defocus_A,
+    astig_mags,
+    astig_panel,
+    go,
+    make_subplots,
+    np,
+):
+    _titles = [
+        f"A1={int(_m)} A, az={int(np.degrees(_az))} deg (r={_ar:.2f})"
+        for _mi, _m in enumerate(astig_mags)
+        for _az, (_img, _ar) in zip(astig_azimuths, astig_panel[_mi])
+    ]
+    _fig = make_subplots(rows=len(astig_mags), cols=len(astig_azimuths),
+                         subplot_titles=_titles, horizontal_spacing=0.04, vertical_spacing=0.10)
+    for _mi in range(len(astig_mags)):
+        for _ai in range(len(astig_azimuths)):
+            _img, _ar = astig_panel[_mi][_ai]
+            _fig.add_trace(go.Heatmap(z=_img.numpy(), colorscale="gray", showscale=False),
+                           row=_mi + 1, col=_ai + 1)
+    _n = len(astig_mags) * len(astig_azimuths)
+    for _k in range(1, _n + 1):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        _fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", autorange="reversed",
+                                showticklabels=False, ticks="")
+        _fig.layout[_xk].update(constrain="domain", showticklabels=False, ticks="")
+    _fig.update_annotations(font_size=11)
+    _fig.update_layout(height=620, width=520, margin=dict(l=8, r=8, t=30, b=8),
+                       title_text=f"2-fold astigmatism at defocus {int(astig_defocus_A)} A")
+    _fig
     return
 
 
