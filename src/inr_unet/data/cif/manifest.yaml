@@ -1,0 +1,51 @@
+entries:
+- cif: Pt.cif
+  zone_axis:
+  - 0
+  - 0
+  - 1
+- cif: Pt.cif
+  zone_axis:
+  - 1
+  - 1
+  - 0
+- cif: NiO.cif
+  zone_axis:
+  - 0
+  - 0
+  - 1
+- cif: NiO.cif
+  zone_axis:
+  - 1
+  - 1
+  - 0
+- cif: SrTiO3.cif
+  zone_axis:
+  - 0
+  - 0
+  - 1
+- cif: SrTiO3.cif
+  zone_axis:
+  - 1
+  - 1
+  - 0
+- cif: Si.cif
+  zone_axis:
+  - 1
+  - 1
+  - 0
+- cif: TiO2_rutile.cif
+  zone_axis:
+  - 0
+  - 0
+  - 1
+- cif: TiO2_rutile.cif
+  zone_axis:
+  - 1
+  - 0
+  - 0
+- cif: TiO2_rutile.cif
+  zone_axis:
+  - 1
+  - 1
+  - 0
