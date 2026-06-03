@@ -46,9 +46,9 @@ data:
   occupancy:
     mode: full
     mix_weights:
-      facet_polygon: 1.0
-      blob: 1.0
-      full: 1.0
+      full: 0.87
+      facet_polygon: 0.10
+      blob: 0.03
     support_frac_min: 0.3
     support_frac_max: 0.9
     n_facets_min: 4

@@ -105,3 +105,27 @@ def test_finite_support_provider_full_is_identity():
     assert isinstance(wrapped, ColumnListProvider)
     assert torch.equal(wrapped.get(0).positions_A, inner.get(0).positions_A)
     assert len(wrapped) == len(inner)
+
+
+def test_default_mix_weights_favor_full():
+    from inr_unet.config import OccupancyConfig
+
+    w = OccupancyConfig().mix_weights
+    total = sum(w.values())
+    assert w["full"] / total > 0.8                       # ~87% full
+    assert w["full"] > w["facet_polygon"] > w["blob"]    # ordered by dataset frequency
+
+
+def test_mix_mode_samples_at_configured_proportions():
+    pos = _grid_positions()
+    basis = torch.tensor([[3.0, 0.0], [0.0, 3.0]])
+    occ = _Occ("mix")
+    occ.mix_weights = {"full": 0.87, "facet_polygon": 0.10, "blob": 0.03}
+    rng = np.random.default_rng(0)
+    full_count = 0
+    trials = 400
+    for _ in range(trials):
+        mask = support_mask(pos, 60.0, basis, occ, rng)
+        if bool(mask.all()):
+            full_count += 1
+    assert 0.78 < full_count / trials < 0.95             # ~0.87 full draws

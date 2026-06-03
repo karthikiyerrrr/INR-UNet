@@ -68,7 +68,7 @@ class CIFConfig:
 class OccupancyConfig:
     mode: str = "full"  # "full" | "facet_polygon" | "blob" | "mix"
     mix_weights: dict[str, float] = field(
-        default_factory=lambda: {"facet_polygon": 1.0, "blob": 1.0, "full": 1.0}
+        default_factory=lambda: {"full": 0.87, "facet_polygon": 0.10, "blob": 0.03}
     )
     support_frac_min: float = 0.3
     support_frac_max: float = 0.9
