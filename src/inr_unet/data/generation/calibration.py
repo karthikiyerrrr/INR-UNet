@@ -10,15 +10,22 @@ import torch
 
 
 def intensity_histogram(
-    image: torch.Tensor, bins: int = 64
+    image: torch.Tensor,
+    bins: int = 64,
+    value_range: tuple[float, float] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Histogram of pixel intensities over the image's own [min, max] range.
+    """Histogram of pixel intensities.
 
-    Returns (counts [bins], edges [bins + 1]). Counts sum to the pixel count.
+    With ``value_range=None`` (default) bins span the image's own [min, max]; with a
+    fixed ``(lo, hi)`` they span that range so histograms are comparable across images
+    (e.g. for cross-image KL). Returns (counts [bins], edges [bins + 1]).
     """
     flat = image.flatten()
-    lo, hi = float(flat.min()), float(flat.max())
-    if hi <= lo:  # constant image: put all mass in the first bin over a unit range
+    if value_range is None:
+        lo, hi = float(flat.min()), float(flat.max())
+    else:
+        lo, hi = float(value_range[0]), float(value_range[1])
+    if hi <= lo:  # degenerate range: put all mass in the first bin over a unit range
         hi = lo + 1.0
     counts = torch.histc(flat, bins=bins, min=lo, max=hi)
     edges = torch.linspace(lo, hi, bins + 1)

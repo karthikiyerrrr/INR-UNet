@@ -20,6 +20,17 @@ def test_intensity_histogram_counts_and_range():
     assert math.isclose(float(edges[-1]), float(img.max()), rel_tol=0, abs_tol=1e-6)
 
 
+def test_intensity_histogram_fixed_range_is_comparable():
+    a = torch.rand(32, 32) * 0.5          # values in [0, 0.5]
+    b = torch.rand(32, 32) * 0.5 + 0.5    # values in [0.5, 1.0]
+    ca, ea = intensity_histogram(a, bins=16, value_range=(0.0, 1.0))
+    cb, eb = intensity_histogram(b, bins=16, value_range=(0.0, 1.0))
+    assert torch.allclose(ea, eb)               # identical bin edges across images
+    assert float(ea[0]) == 0.0 and float(ea[-1]) == 1.0
+    assert int(ca[:8].sum()) > int(ca[8:].sum())  # mass of `a` sits in the low half
+    assert int(cb[8:].sum()) > int(cb[:8].sum())  # mass of `b` sits in the high half
+
+
 def test_radial_power_spectrum_sinusoid_peaks_at_its_frequency():
     n, k = 64, 8
     ax = torch.arange(n, dtype=torch.float32)
