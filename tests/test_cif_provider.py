@@ -55,3 +55,34 @@ def test_out_of_range_raises():
 
 def test_satisfies_protocol():
     assert isinstance(_provider(), ColumnListProvider)
+
+
+def _provider_partial(n_scenes=6, seed=0):
+    return CIFProvider(
+        manifest_path="src/inr_unet/data/cif/manifest.yaml",
+        n_scenes=n_scenes,
+        master_seed=seed,
+        n_exponent=1.7,
+        group_tol_A=0.4,
+        scene_fov_A=(60.0, 80.0),
+        rotation_jitter_deg=5.0,
+        partial_fov_prob=1.0,
+        supercell_nx_range=(2, 2),
+        supercell_ny_range=(1, 1),
+    )
+
+
+def test_partial_fov_leaves_margins():
+    from inr_unet.data.generation.structures import Grid
+
+    scene = _provider_partial().get(2)
+    assert scene.positions_A.shape[0] > 0
+    span = scene.positions_A.max(dim=0).values - scene.positions_A.min(dim=0).values
+    # a 2x1 supercell occupies only a band inside the (>=60 A) FOV
+    assert float(span.max()) < scene.fov_A
+    scene.validate(Grid(output_size=48, pixel_size_A=0.3))
+
+
+def test_partial_fov_is_deterministic():
+    a, b = _provider_partial().get(3), _provider_partial().get(3)
+    assert torch.equal(a.positions_A, b.positions_A)

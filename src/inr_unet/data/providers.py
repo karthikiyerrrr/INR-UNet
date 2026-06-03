@@ -99,6 +99,9 @@ class CIFProvider:
         group_tol_A: float,
         scene_fov_A: tuple[float, float],
         rotation_jitter_deg: float,
+        partial_fov_prob: float = 0.0,
+        supercell_nx_range: tuple[int, int] = (1, 3),
+        supercell_ny_range: tuple[int, int] = (1, 2),
     ) -> None:
         self.n_scenes = int(n_scenes)
         self.master_seed = int(master_seed)
@@ -106,6 +109,9 @@ class CIFProvider:
         self.group_tol_A = float(group_tol_A)
         self.scene_fov_A = (float(scene_fov_A[0]), float(scene_fov_A[1]))
         self.rotation_jitter_deg = float(rotation_jitter_deg)
+        self.partial_fov_prob = float(partial_fov_prob)
+        self.supercell_nx_range = (int(supercell_nx_range[0]), int(supercell_nx_range[1]))
+        self.supercell_ny_range = (int(supercell_ny_range[0]), int(supercell_ny_range[1]))
         manifest = yaml.safe_load(Path(manifest_path).read_text())
         self._cif_dir = Path(manifest_path).parent
         self._entries = manifest["entries"]
@@ -132,13 +138,32 @@ class CIFProvider:
         entry = self._entries[scene_idx % len(self._entries)]
         fov_A = float(rng.uniform(*self.scene_fov_A))
         angle_deg = float(rng.uniform(-self.rotation_jitter_deg, self.rotation_jitter_deg))
+        use_partial = bool(rng.random() < self.partial_fov_prob)
+        supercell = None
+        if use_partial:
+            nx = int(rng.integers(self.supercell_nx_range[0], self.supercell_nx_range[1] + 1))
+            ny = int(rng.integers(self.supercell_ny_range[0], self.supercell_ny_range[1] + 1))
+            supercell = (nx, ny)
         pos, z, count, basis = project_structure(
             self._structure(entry["cif"]),
             entry["zone_axis"],
             fov_A=fov_A,
             n_exponent=self.n_exponent,
             group_tol_A=self.group_tol_A,
+            supercell=supercell,
         )
+        if use_partial and pos.shape[0] > 0:
+            # place the small patch at a seeded offset inside the FOV, leaving margins
+            span = pos.max(dim=0).values - pos.min(dim=0).values
+            slack = torch.clamp(torch.tensor(fov_A) - span, min=0.0)
+            off = torch.tensor(
+                [
+                    float(rng.uniform(0.0, float(slack[0]))),
+                    float(rng.uniform(0.0, float(slack[1]))),
+                ],
+                dtype=pos.dtype,
+            )
+            pos = pos - pos.min(dim=0).values + off
         if pos.shape[0] > 0 and angle_deg != 0.0:
             theta = math.radians(angle_deg)
             c, s = math.cos(theta), math.sin(theta)

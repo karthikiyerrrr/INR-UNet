@@ -58,6 +58,10 @@ class CIFConfig:
     scene_fov_A_min: float = 60.0
     scene_fov_A_max: float = 80.0
     rotation_jitter_deg: float = 5.0
+    z_eff_exponent: float = 1.7          # exponent for the projection z_eff collapse
+    partial_fov_prob: float = 0.0        # P(render a small supercell in a band vs fill the FOV)
+    supercell_nx_range: list[int] = field(default_factory=lambda: [1, 3])
+    supercell_ny_range: list[int] = field(default_factory=lambda: [1, 2])
 
 
 @dataclass
