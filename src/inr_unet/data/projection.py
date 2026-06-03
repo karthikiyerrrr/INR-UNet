@@ -22,6 +22,37 @@ def _vec2(v: np.ndarray, e1: np.ndarray, e2: np.ndarray) -> np.ndarray:
     return np.array([float(v @ e1), float(v @ e2)])
 
 
+def _tile_ranges(
+    lat: np.ndarray,
+    e1: np.ndarray,
+    e2: np.ndarray,
+    beam_hat: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+) -> list[range]:
+    """Integer (i, j, k) lattice-translation ranges whose cells cover an oriented box.
+
+    The box is given by its lower/upper corners ``lo``/``hi`` in (e1, e2, beam_hat)
+    coordinates. Mapping the 8 box corners to fractional lattice coordinates gives a tight
+    per-index integer range, so a beam-parallel lattice vector needs few reps while in-plane
+    vectors get many -- no blow-up, no undersampling.
+    """
+    basis = np.stack([e1, e2, beam_hat])  # rows; orthonormal
+    corners_ortho = np.array(
+        [
+            [hi[0] if (m & 1) else lo[0],
+             hi[1] if (m & 2) else lo[1],
+             hi[2] if (m & 4) else lo[2]]
+            for m in range(8)
+        ]
+    )
+    corners_cart = corners_ortho @ basis  # (e1, e2, beam) coords -> Cartesian
+    frac = corners_cart @ np.linalg.inv(lat)  # cart = frac @ lat
+    fmin = np.floor(frac.min(axis=0)).astype(int) - 1
+    fmax = np.ceil(frac.max(axis=0)).astype(int) + 1
+    return [range(int(fmin[d]), int(fmax[d]) + 1) for d in range(3)]
+
+
 def _in_plane_frame(
     lattice_matrix: np.ndarray, zone_axis: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -81,8 +112,8 @@ def project_structure(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Project a structure along a zone axis into (positions_A, z_eff, count, lattice_basis_A).
 
-    Tiles the cell to cover fov_A in-plane and exactly one cell deep along the beam,
-    projects atoms onto the plane normal to the zone axis, groups coincident atoms into
+    Tiles the cell over an oriented box covering the FOV in-plane and exactly one beam-period
+    deep, projects atoms onto the plane normal to the zone axis, groups coincident atoms into
     columns, and reduces each mixed column to an effective z with count * z**n == sum(z_i**n).
     """
     lat = np.asarray(structure.lattice.matrix, dtype=float)  # rows = a, b, c (Cartesian)
@@ -90,28 +121,43 @@ def project_structure(
     beam_hat, e1, e2, align = _in_plane_frame(lat, axis)
     beam_axis = int(np.argmax(align))  # lattice vector most parallel to the beam
     in_plane_axes = [i for i in range(3) if i != beam_axis]
-
-    span = fov_A + 2.0 * margin_A
-    ranges: list[range] = []
-    for i in range(3):
-        if i == beam_axis:
-            ranges.append(range(0, 1))  # single slab along the beam
-        else:
-            length = np.linalg.norm(_vec2(lat[i], e1, e2))
-            reps = int(np.ceil(span / max(length, 1e-6))) + 1
-            ranges.append(range(-reps, reps + 1))
+    a_2d = _vec2(lat[in_plane_axes[0]], e1, e2)
+    b_2d = _vec2(lat[in_plane_axes[1]], e1, e2)
 
     cart = np.asarray([site.coords for site in structure.sites], dtype=float)  # [A, 3]
     zs_cell = np.asarray([site.specie.Z for site in structure.sites], dtype=float)  # [A]
 
-    pts_list, z_list = [], []
+    area = abs(a_2d[0] * b_2d[1] - a_2d[1] * b_2d[0])
+    beam_period = abs(np.linalg.det(lat)) / max(area, 1e-9)  # one cell deep along the beam
+
+    lo = np.array([-margin_A, -margin_A, 0.0])
+    hi = np.array([fov_A + margin_A, fov_A + margin_A, beam_period])
+    ranges = _tile_ranges(lat, e1, e2, beam_hat, lo, hi)
+
+    pts_list, t_list, z_list = [], [], []
     for i, j, k in product(*ranges):
         shift = i * lat[0] + j * lat[1] + k * lat[2]
         for a in range(cart.shape[0]):
-            pts_list.append(_vec2(cart[a] + shift, e1, e2))
+            c = cart[a] + shift
+            pts_list.append(_vec2(c, e1, e2))
+            t_list.append(float(c @ beam_hat))
             z_list.append(zs_cell[a])
+
+    basis = np.stack([a_2d, b_2d])
+    if not pts_list:
+        return (
+            torch.zeros((0, 2), dtype=torch.float32),
+            torch.zeros(0, dtype=torch.float32),
+            torch.zeros(0, dtype=torch.float32),
+            torch.tensor(basis, dtype=torch.float32),
+        )
+
     pts = np.asarray(pts_list)
+    ts = np.asarray(t_list)
     zs = np.asarray(z_list)
+
+    slab = (ts >= 0.0) & (ts < beam_period)  # keep exactly one period deep
+    pts, zs = pts[slab], zs[slab]
 
     pts = pts - pts.min(axis=0)
     inside = (
@@ -123,9 +169,6 @@ def project_structure(
     pts, zs = pts[inside], zs[inside]
 
     xy, z_eff, count = _group_columns(pts, zs, group_tol_A, n_exponent)
-    basis = np.stack(
-        [_vec2(lat[in_plane_axes[0]], e1, e2), _vec2(lat[in_plane_axes[1]], e1, e2)]
-    )
     return (
         torch.tensor(xy, dtype=torch.float32),
         torch.tensor(z_eff, dtype=torch.float32),

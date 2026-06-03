@@ -61,6 +61,33 @@ def test_mixed_column_effective_z_matches_power_sum():
         assert c * z_eff**1.7 > 8.0**1.7
 
 
+def test_pt111_is_densely_sampled():
+    # Regression for the argmax tiling bug: [111] used to yield only ~9 columns.
+    pos, z, count, basis = project_structure(
+        _pt_fcc(), zone_axis=[1, 1, 1], fov_A=30.0, n_exponent=1.7, group_tol_A=0.4
+    )
+    assert pos.shape[0] > 80  # dense hex net, not the old 9
+    lengths = torch.linalg.norm(basis, dim=1)
+    cosang = torch.dot(basis[0], basis[1]) / (lengths[0] * lengths[1])
+    angle = torch.rad2deg(torch.arccos(cosang)).item()
+    assert abs(angle - 120.0) < 1.0  # hexagonal frame preserved
+
+
+def test_low_index_nets_preserved():
+    # [001] and [110] keep their dense nets and bases after the tiling rewrite.
+    pos1, z1, _, basis1 = project_structure(_pt_fcc(), [0, 0, 1], 30.0, 1.7, 0.4)
+    assert pos1.shape[0] > 200
+    assert torch.allclose(torch.linalg.norm(basis1, dim=1),
+                          torch.tensor([3.924, 3.924]), atol=0.05)
+    assert torch.allclose(z1, torch.full_like(z1, 78.0), atol=1e-3)
+    assert float(pos1.min()) >= -1e-3 and float(pos1.max()) <= 30.0 + 1e-3
+
+    pos2, _, _, basis2 = project_structure(_pt_fcc(), [1, 1, 0], 30.0, 1.7, 0.4)
+    assert pos2.shape[0] > 150
+    assert torch.allclose(torch.linalg.norm(basis2, dim=1),
+                          torch.tensor([2.775, 3.924]), atol=0.05)
+
+
 def test_projection_is_deterministic():
     a = project_structure(_pt_fcc(), [0, 0, 1], 30.0, 1.7, 0.4)
     b = project_structure(_pt_fcc(), [0, 0, 1], 30.0, 1.7, 0.4)
