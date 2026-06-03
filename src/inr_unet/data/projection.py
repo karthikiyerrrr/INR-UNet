@@ -127,12 +127,16 @@ def project_structure(
     n_exponent: float,
     group_tol_A: float,
     margin_A: float = 4.0,
+    supercell: tuple[int, int] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Project a structure along a zone axis into (positions_A, z_eff, count, lattice_basis_A).
 
     Tiles the cell over an oriented box covering the FOV in-plane and exactly one beam-period
     deep, projects atoms onto the plane normal to the zone axis, groups coincident atoms into
     columns, and reduces each mixed column to an effective z with count * z**n == sum(z_i**n).
+
+    If ``supercell=(nx, ny)`` is given, tiles exactly nx x ny in-plane cells (one cell deep)
+    and returns positions in the supercell's own extent rather than clipping to the FOV.
     """
     lat = np.asarray(structure.lattice.matrix, dtype=float)  # rows = a, b, c (Cartesian)
     axis = np.asarray(zone_axis, dtype=float)
@@ -148,9 +152,16 @@ def project_structure(
     area = abs(a_2d[0] * b_2d[1] - a_2d[1] * b_2d[0])
     beam_period = abs(np.linalg.det(lat)) / max(area, 1e-9)  # one cell deep along the beam
 
-    lo = np.array([-margin_A, -margin_A, 0.0])
-    hi = np.array([fov_A + margin_A, fov_A + margin_A, beam_period])
-    ranges = _tile_ranges(lat, e1, e2, beam_hat, lo, hi)
+    if supercell is None:
+        lo = np.array([-margin_A, -margin_A, 0.0])
+        hi = np.array([fov_A + margin_A, fov_A + margin_A, beam_period])
+        ranges = _tile_ranges(lat, e1, e2, beam_hat, lo, hi)
+    else:
+        nx, ny = int(supercell[0]), int(supercell[1])
+        ranges: list[range] = [range(0)] * 3  # each entry reassigned below
+        ranges[in_plane_axes[0]] = range(0, nx)
+        ranges[in_plane_axes[1]] = range(0, ny)
+        ranges[beam_axis] = range(0, 1)  # exactly one cell deep along the beam
 
     pts_list, t_list, z_list = [], [], []
     for i, j, k in product(*ranges):
@@ -174,17 +185,19 @@ def project_structure(
     ts = np.asarray(t_list)
     zs = np.asarray(z_list)
 
-    slab = (ts >= 0.0) & (ts < beam_period)  # keep exactly one period deep
-    pts, zs = pts[slab], zs[slab]
-
-    pts = pts - pts.min(axis=0)
-    inside = (
-        (pts[:, 0] >= 0.0)
-        & (pts[:, 0] <= fov_A)
-        & (pts[:, 1] >= 0.0)
-        & (pts[:, 1] <= fov_A)
-    )
-    pts, zs = pts[inside], zs[inside]
+    if supercell is None:
+        slab = (ts >= 0.0) & (ts < beam_period)  # keep exactly one period deep
+        pts, zs = pts[slab], zs[slab]
+        pts = pts - pts.min(axis=0)
+        inside = (
+            (pts[:, 0] >= 0.0)
+            & (pts[:, 0] <= fov_A)
+            & (pts[:, 1] >= 0.0)
+            & (pts[:, 1] <= fov_A)
+        )
+        pts, zs = pts[inside], zs[inside]
+    else:
+        pts = pts - pts.min(axis=0)  # small extent; provider places it inside a larger FOV
 
     xy, z_eff, count = _group_columns(pts, zs, group_tol_A, n_exponent)
     return (

@@ -95,6 +95,22 @@ def test_projection_is_deterministic():
     assert torch.equal(a[0], b[0]) and torch.equal(a[1], b[1])
 
 
+def test_supercell_tiles_a_small_patch():
+    # NiO-style small supercell: a fixed 2x1 tile, not a FOV-filling net.
+    nio = Structure.from_spacegroup(
+        "Fm-3m", Lattice.cubic(4.18), ["Ni", "O"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+    pos_full, *_ = project_structure(nio, [1, 1, 0], 40.0, 1.7, 0.4)
+    pos_sc, _, _, _ = project_structure(
+        nio, [1, 1, 0], 40.0, 1.7, 0.4, supercell=(2, 1)
+    )
+    # the supercell patch is far smaller and occupies a sub-region, not the whole FOV
+    assert pos_sc.shape[0] < pos_full.shape[0]
+    extent = pos_sc.max(dim=0).values - pos_sc.min(dim=0).values
+    assert float(extent.max()) < 40.0  # fits in a band, leaving room for margins
+    assert pos_sc.shape[0] > 0
+
+
 def test_group_columns_is_order_independent():
     rng = np.random.default_rng(0)
     pts = rng.uniform(0.0, 20.0, size=(200, 2))
