@@ -36,3 +36,32 @@ def test_nonlinear_capped_and_nonnegative():
     assert bg.shape == (32, 32)
     assert (bg >= 0).all()
     assert bg.max() <= 0.8 * 10.0 + 1e-5
+
+
+def test_perlin_registered_low_freq_and_bounded():
+    from inr_unet.data.generation.background import perlin_bg
+
+    assert "perlin" in set(BACKGROUNDS.keys())
+    grid = Grid(output_size=64, pixel_size_A=0.1)
+    bg = perlin_bg(grid, {"amp": 0.3, "cells": 4}, signal_scale=10.0, generator=_gen(2))
+    assert bg.shape == (64, 64)
+    assert float(bg.min()) >= 0.0
+    assert float(bg.max()) <= 0.3 * 10.0 + 1e-4
+    # low-frequency: most spectral energy below the cell frequency
+    spec = torch.fft.fftshift(torch.fft.fft2(bg - bg.mean())).abs() ** 2
+    h = 64
+    cy, cx = h // 2, h // 2
+    yy, xx = torch.meshgrid(torch.arange(h) - cy, torch.arange(h) - cx, indexing="ij")
+    r = torch.sqrt((yy.float()) ** 2 + (xx.float()) ** 2)
+    low = float(spec[r <= 8].sum())
+    high = float(spec[r > 8].sum())
+    assert low > high
+
+
+def test_perlin_deterministic_given_seed():
+    from inr_unet.data.generation.background import perlin_bg
+
+    grid = Grid(output_size=32, pixel_size_A=0.1)
+    a = perlin_bg(grid, {"amp": 0.2, "cells": 3}, signal_scale=5.0, generator=_gen(4))
+    b = perlin_bg(grid, {"amp": 0.2, "cells": 3}, signal_scale=5.0, generator=_gen(4))
+    assert torch.allclose(a, b)

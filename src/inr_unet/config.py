@@ -117,7 +117,9 @@ class SamplerConfig:
     )
     # background family mix + amplitude ranges
     bg_weights: dict[str, float] = field(
-        default_factory=lambda: {"constant": 1.0, "linear_ramp": 1.0, "nonlinear": 1.0}
+        default_factory=lambda: {
+            "constant": 1.0, "linear_ramp": 1.0, "nonlinear": 1.0, "perlin": 1.0
+        }
     )
     bg_constant_c_min: float = 0.05
     bg_constant_c_max: float = 0.40
@@ -127,6 +129,10 @@ class SamplerConfig:
     bg_ramp_g_max: float = 0.60
     bg_nonlinear_blobs_min: int = 2
     bg_nonlinear_blobs_max: int = 5
+    bg_perlin_amp_min: float = 0.05
+    bg_perlin_amp_max: float = 0.35
+    bg_perlin_cells_min: int = 2
+    bg_perlin_cells_max: int = 6
     # noise ranges
     n_peak_min: float = 30.0
     n_peak_max: float = 3000.0

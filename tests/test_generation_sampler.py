@@ -116,7 +116,10 @@ def test_draw_background_families_and_params():
             assert 0.10 <= bg.params["g"] <= 0.60
         elif bg.kind == "nonlinear":
             assert 2 <= bg.params["n_blobs"] <= 5
-    assert seen == {"constant", "linear_ramp", "nonlinear"}
+        elif bg.kind == "perlin":
+            assert 0.05 <= bg.params["amp"] <= 0.35
+            assert 2 <= bg.params["cells"] <= 6
+    assert seen == {"constant", "linear_ramp", "nonlinear", "perlin"}
 
 
 def test_rotation_choices_filtered_to_feasible():
@@ -235,7 +238,7 @@ def test_sample_distribution_sane():
         assert 0.05 <= p.pixel_size_A <= 0.30
     assert rots == {0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0}
     assert all(30.0 <= n <= 3000.0 for n in npeaks)
-    assert set(kinds) == {"constant", "linear_ramp", "nonlinear"}
+    assert set(kinds) == {"constant", "linear_ramp", "nonlinear", "perlin"}
 
 
 def test_sampler_output_renders():

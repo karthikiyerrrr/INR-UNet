@@ -97,6 +97,12 @@ class AugmentationSampler:
         elif kind == "nonlinear":
             params = {"n_blobs": int(rng.integers(self.cfg.bg_nonlinear_blobs_min,
                                                   self.cfg.bg_nonlinear_blobs_max + 1))}
+        elif kind == "perlin":
+            params = {
+                "amp": float(rng.uniform(self.cfg.bg_perlin_amp_min, self.cfg.bg_perlin_amp_max)),
+                "cells": int(rng.integers(self.cfg.bg_perlin_cells_min,
+                                          self.cfg.bg_perlin_cells_max + 1)),
+            }
         else:
             raise ValueError(f"unknown background kind {kind!r}")
         return BackgroundSpec(kind=kind, params=params)

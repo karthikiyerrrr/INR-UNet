@@ -77,6 +77,7 @@ generation:
       constant: 1.0
       linear_ramp: 1.0
       nonlinear: 1.0
+      perlin: 1.0
     bg_constant_c_min: 0.05
     bg_constant_c_max: 0.40
     bg_ramp_c0_min: 0.05
@@ -85,6 +86,10 @@ generation:
     bg_ramp_g_max: 0.60
     bg_nonlinear_blobs_min: 2
     bg_nonlinear_blobs_max: 5
+    bg_perlin_amp_min: 0.05
+    bg_perlin_amp_max: 0.35
+    bg_perlin_cells_min: 2
+    bg_perlin_cells_max: 6
     n_peak_min: 30.0
     n_peak_max: 3000.0
     n_bg_frac_max: 0.05
