@@ -53,3 +53,18 @@ def radial_power_spectrum(image: torch.Tensor) -> tuple[torch.Tensor, torch.Tens
     radial = radial / counts.clamp(min=1.0)
     freq = torch.arange(r_max + 1, dtype=torch.float32)
     return freq, radial
+
+
+def noise_autocorrelation(image: torch.Tensor) -> torch.Tensor:
+    """2D autocorrelation of the mean-removed image, normalized to 1.0 at zero lag.
+
+    Returns an [H, W] map with zero lag at the center (fftshifted). Row-correlated scan
+    noise shows up as elevated correlation along the row (x-lag) axis -- the most
+    under-simulated real-ADF artifact.
+    """
+    x = image - image.mean()
+    spec = torch.fft.fft2(x)
+    ac = torch.fft.ifft2(spec * spec.conj()).real
+    ac = torch.fft.fftshift(ac)
+    peak = ac.max()
+    return ac / peak if peak > 0 else ac

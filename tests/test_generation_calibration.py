@@ -46,3 +46,32 @@ def test_radial_power_spectrum_flat_concentrates_at_dc():
     freq, power = radial_power_spectrum(img)
     assert int(torch.argmax(power)) == 0
     assert float(power[0]) > float(power[1:].max()) * 10.0
+
+
+def test_row_autocorrelation_detects_horizontal_streaks():
+    from inr_unet.data.generation.calibration import noise_autocorrelation
+
+    torch.manual_seed(0)
+    # rows constant across columns -> strong correlation along the column (x) lag axis
+    row_vals = torch.randn(48, 1)
+    streaky = row_vals.expand(48, 48)
+    ac = noise_autocorrelation(streaky)
+    assert ac.shape == (48, 48)
+    center = 48 // 2
+    # along-row lag profile (varying x lag at zero y lag) stays high; across-row drops off
+    along_row = ac[center, :]                 # vary x-lag
+    across_row = ac[:, center]                # vary y-lag
+    assert float(along_row.mean()) > float(across_row.mean())
+
+
+def test_autocorrelation_white_noise_is_delta_at_zero_lag():
+    from inr_unet.data.generation.calibration import noise_autocorrelation
+
+    torch.manual_seed(1)
+    white = torch.randn(64, 64)
+    ac = noise_autocorrelation(white)
+    center = 64 // 2
+    peak = float(ac[center, center])
+    off = float(ac[center, center + 5])
+    assert peak >= 0.99                       # normalized to 1.0 at zero lag
+    assert abs(off) < 0.3                      # negligible correlation away from zero lag
