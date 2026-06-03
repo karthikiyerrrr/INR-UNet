@@ -99,6 +99,8 @@ class TrainConfig:
 class SamplerConfig:
     # scale
     fov_set_A: list[float] = field(default_factory=lambda: [8.0, 10.0, 20.0, 30.0, 40.0])
+    # pixel size is a free log-uniform variable (the resolution-agnostic / LIIF extension);
+    # Lin2021 implicitly fixed pixel size at FOV / 256.
     pixel_size_A_min: float = 0.05
     pixel_size_A_max: float = 0.30
     # geometry
@@ -131,7 +133,9 @@ class SamplerConfig:
     scan_beta_max: float = 0.5
     # physics constant (NOT randomized; visual-calibration knob)
     z_exponent: float = 1.7
-    # per-render aberration draws (visual-calibration knobs; 0.0 disables that draw)
+    # per-render aberration draws (extensions beyond Lin2021, which used zero aberrations).
+    # Pair sampled A1 with nonzero defocus: A1 produces no ellipticity at exact focus. 0.0
+    # disables that draw.
     defocus_A_max: float = 40.0   # defocus ~ U(-defocus_A_max, +defocus_A_max)
     astig_a1_A_max: float = 40.0  # 2-fold astigmatism magnitude ~ U(0, astig_a1_A_max)
     device: str = "cpu"

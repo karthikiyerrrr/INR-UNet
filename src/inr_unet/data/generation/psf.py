@@ -26,6 +26,15 @@ def _aberration_chi(
     radial dependence, azimuthally modulated by cos(2(phi - azimuth)); A1 is in angstroms.
     With A1 = 0 the term is a zero tensor, so chi is bitwise-identical to the radial-only
     form.
+
+    Note: at exact focus (defocus = 0) the A1 term contributes no azimuthal *ellipticity*,
+    but that is not the same as "no degradation" -- the aperture still circularly broadens
+    the probe. A1 is only visible as elongation when paired with nonzero defocus, which is
+    why the sampler always draws defocus alongside A1.
+
+    Extension beyond Lin2021: that work fixed defocus = C3 = C5 = astigmatism = 0 in every
+    imaging condition. Defocus and 2-fold A1 astigmatism here are a deliberate,
+    physically-motivated extension with no source-paper anchor.
     """
     radial = (
         0.5 * cond.defocus_A * lam**2 * k**2
