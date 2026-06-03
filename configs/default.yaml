@@ -92,7 +92,8 @@ generation:
     scan_freq_max: 0.5
     scan_beta_min: 0.3
     scan_beta_max: 0.5
-    z_exponent: 1.7
+    z_exponent_min: 1.5
+    z_exponent_max: 2.0
     defocus_A_max: 40.0
     astig_a1_A_max: 40.0
     device: cpu

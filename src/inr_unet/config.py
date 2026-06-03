@@ -135,8 +135,11 @@ class SamplerConfig:
     scan_freq_max: float = 0.5
     scan_beta_min: float = 0.3
     scan_beta_max: float = 0.5
-    # physics constant (NOT randomized; visual-calibration knob)
-    z_exponent: float = 1.7
+    # per-render ADF intensity weighting (count * Z**z_exponent); sampled over [min, max]
+    # as an augmentation (measured HAADF exponents span ~1.5-1.9; central estimate 1.7).
+    # Distinct from data.cif.z_eff_exponent, which collapses mixed columns at projection time.
+    z_exponent_min: float = 1.5
+    z_exponent_max: float = 2.0
     # per-render aberration draws (extensions beyond Lin2021, which used zero aberrations).
     # Pair sampled A1 with nonzero defocus: A1 produces no ellipticity at exact focus. 0.0
     # disables that draw.

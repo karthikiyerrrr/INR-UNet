@@ -194,8 +194,21 @@ def test_sample_returns_condition_and_params():
     cond, params = s.sample(0, max_fov_A=80.0)
     assert isinstance(cond, ImagingCondition)
     assert isinstance(params, RenderParams)
-    assert params.z_exponent == 1.7  # held fixed from config
+    assert 1.5 <= params.z_exponent <= 2.0  # sampled per render
     assert params.position_offset_A.shape == (2,)
+
+
+def test_z_exponent_is_sampled_in_range_and_varies():
+    from inr_unet.config import SamplerConfig
+    from inr_unet.data.generation.sampler import AugmentationSampler
+
+    sampler = AugmentationSampler(SamplerConfig(), master_seed=0)
+    vals = [sampler.sample(i, max_fov_A=120.0)[1].z_exponent for i in range(32)]
+    assert all(1.5 <= v <= 2.0 for v in vals)
+    assert len(set(round(v, 6) for v in vals)) > 1   # actually varies across indices
+    # determinism per index
+    assert sampler.sample(5, max_fov_A=120.0)[1].z_exponent == \
+           AugmentationSampler(SamplerConfig(), 0).sample(5, max_fov_A=120.0)[1].z_exponent
 
 
 def test_sample_deterministic_by_index():

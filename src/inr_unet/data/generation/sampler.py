@@ -180,12 +180,13 @@ class AugmentationSampler:
         background = self._draw_background(rng)
         noise = self._draw_noise(rng)
         offset = self._draw_offset(rng, fov_A, rotation_deg, max_fov_A)
+        z_exponent = float(rng.uniform(self.cfg.z_exponent_min, self.cfg.z_exponent_max))
         params = RenderParams(
             output_size=output_size,
             pixel_size_A=pixel_size_A,
             rotation_deg=rotation_deg,
             position_offset_A=offset,
-            z_exponent=float(self.cfg.z_exponent),
+            z_exponent=z_exponent,
             background=background,
             noise=noise,
             seed=render_seed,

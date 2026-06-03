@@ -66,13 +66,18 @@ class SyntheticRenderSource:
                 manifest_path=str(cfg.data.cif.manifest_path),
                 n_scenes=int(syn.n_scenes),
                 master_seed=self.master_seed,
-                n_exponent=float(cfg.generation.sampler.z_exponent),
+                # projection-collapse exponent (per-scene, fixed); distinct from the
+                # sampler's per-render ADF weighting exponent (sampler.z_exponent_*).
+                n_exponent=float(cfg.data.cif.z_eff_exponent),
                 group_tol_A=float(cfg.data.cif.group_tol_A),
                 scene_fov_A=(
                     float(cfg.data.cif.scene_fov_A_min),
                     float(cfg.data.cif.scene_fov_A_max),
                 ),
                 rotation_jitter_deg=float(cfg.data.cif.rotation_jitter_deg),
+                partial_fov_prob=float(cfg.data.cif.partial_fov_prob),
+                supercell_nx_range=tuple(cfg.data.cif.supercell_nx_range),
+                supercell_ny_range=tuple(cfg.data.cif.supercell_ny_range),
             )
         else:
             inner = SyntheticLatticeProvider(syn, self.master_seed)
