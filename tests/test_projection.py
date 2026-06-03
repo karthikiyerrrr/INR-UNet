@@ -1,9 +1,10 @@
 """Zone-axis projection of crystal structures into projected columns."""
 
+import numpy as np
 import torch
 from pymatgen.core import Lattice, Structure
 
-from inr_unet.data.projection import project_structure
+from inr_unet.data.projection import _group_columns, project_structure
 
 
 def _pt_fcc():
@@ -92,3 +93,20 @@ def test_projection_is_deterministic():
     a = project_structure(_pt_fcc(), [0, 0, 1], 30.0, 1.7, 0.4)
     b = project_structure(_pt_fcc(), [0, 0, 1], 30.0, 1.7, 0.4)
     assert torch.equal(a[0], b[0]) and torch.equal(a[1], b[1])
+
+
+def test_group_columns_is_order_independent():
+    rng = np.random.default_rng(0)
+    pts = rng.uniform(0.0, 20.0, size=(200, 2))
+    zs = rng.integers(6, 80, size=200).astype(float)
+    perm = rng.permutation(200)
+
+    xy_a, z_a, c_a = _group_columns(pts, zs, tol_A=0.4, n=1.7)
+    xy_b, z_b, c_b = _group_columns(pts[perm], zs[perm], tol_A=0.4, n=1.7)
+
+    # columns are returned in a deterministic (lexicographic) order, so compare directly
+    assert xy_a.shape == xy_b.shape
+    assert np.allclose(xy_a, xy_b, atol=1e-6)
+    assert np.allclose(z_a, z_b, atol=1e-6)
+    assert np.allclose(c_a, c_b, atol=1e-6)
+    assert c_a.max() > 1  # grouping actually merged some atoms (not all singletons)

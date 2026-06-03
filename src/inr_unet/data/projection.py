@@ -72,34 +72,52 @@ def _in_plane_frame(
 def _group_columns(
     pts: np.ndarray, zs: np.ndarray, tol_A: float, n: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Greedy clustering of coincident projected atoms into columns.
+    """Order-independent clustering of coincident projected atoms into columns.
 
-    Deterministic in input order.
+    Union-find over the within-tolerance coincidence graph; column centers are member
+    means and columns are returned in lexicographic (x, then y) order, so the result is
+    invariant to input atom order.
     """
-    centers: list[np.ndarray] = []
-    members: list[list[float]] = []
-    tol2 = tol_A * tol_A
-    for p, z in zip(pts, zs, strict=True):
-        placed = False
-        for ci, c in enumerate(centers):
-            dx, dy = p[0] - c[0], p[1] - c[1]
-            if dx * dx + dy * dy <= tol2:
-                members[ci].append(float(z))
-                placed = True
-                break
-        if not placed:
-            centers.append(p.copy())
-            members.append([float(z)])
+    npts = pts.shape[0]
+    if npts == 0:
+        return np.zeros((0, 2)), np.zeros(0), np.zeros(0)
+
+    parent = list(range(npts))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    d2 = ((pts[:, None, :] - pts[None, :, :]) ** 2).sum(axis=-1)
+    ii, jj = np.where((d2 <= tol_A * tol_A) & (np.arange(npts)[:, None] < np.arange(npts)[None, :]))
+    for a, b in zip(ii, jj, strict=True):
+        union(int(a), int(b))
+
+    groups: dict[int, list[int]] = {}
+    for i in range(npts):
+        groups.setdefault(find(i), []).append(i)
+
     xy, z_eff, count = [], [], []
-    for c, ms in zip(centers, members, strict=True):
-        arr = np.asarray(ms)
+    for members in groups.values():
+        m = np.asarray(members)
+        arr = zs[m]
         nat = arr.shape[0]
-        xy.append(c)
+        xy.append(pts[m].mean(axis=0))
         z_eff.append(float((np.sum(arr**n) / nat) ** (1.0 / n)))
         count.append(float(nat))
-    if not xy:
-        return np.zeros((0, 2)), np.zeros(0), np.zeros(0)
-    return np.asarray(xy), np.asarray(z_eff), np.asarray(count)
+
+    xy = np.asarray(xy)
+    z_eff = np.asarray(z_eff)
+    count = np.asarray(count)
+    order = np.lexsort((xy[:, 1], xy[:, 0]))
+    return xy[order], z_eff[order], count[order]
 
 
 def project_structure(
