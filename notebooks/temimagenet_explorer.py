@@ -968,7 +968,7 @@ def _(Image, mo, np, pathlib, torch):
         else "No reference images found -- run "
         "`uv run python scripts/fetch_reference_images.py --count 50`."
     )
-    return real_imgs, real_indices, real_pixel_sizes
+    return real_imgs, real_indices
 
 
 @app.cell(hide_code=True)
@@ -1131,15 +1131,16 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Parameter-matched comparison
+    ### Reference vs augmented synthetic
 
-    Each reference image from TEM-ImageNet was generated with a single fixed imaging
-    condition (200 kV, 24 mrad, 0.9 A source -- our `cond1`), in focus, with only the
-    **pixel size** varying image-to-image (FOV = 256 x pixel_size ~ 56-74 A). The
-    structure is not recorded in the params, so pick the closest crystal per row; the
-    synthetic side then renders that structure at the reference's exact pixel size, in
-    focus, with dose and z-exponent dialed by eye. Below the matched pairs: synthetic-only
-    capabilities with no counterpart in the reference set.
+    The TEM-ImageNet params fix only the **imaging condition** (200 kV, 24 mrad, 0.9 A =
+    `cond1`); pixel size varies per image and the structure is not recorded. So here we
+    **pin cond1** and let the training **augmentation sampler** randomize everything else --
+    rotation, defocus, astigmatism, background family, scan noise, dose, z-exponent, and
+    **FOV (the zoom)** -- to reproduce the varied character of real micrographs rather than a
+    sterile grid. Pick the crystal per row; the seed reshuffles both the reference selection
+    and the augmentation draws. Below the pairs: synthetic-only capabilities with no
+    reference-set counterpart.
     """)
     return
 
@@ -1157,6 +1158,7 @@ def _(
     pathlib,
     project_structure,
     replace,
+    torch,
 ):
     from pymatgen.core import Structure
 
@@ -1187,23 +1189,50 @@ def _(
                           lattice_basis_A=_basis)
 
 
-    def cmp_render(cif, zone_axis, px, n_peak, z_exp, defocus=0.0, astig=0.0, background=None):
+    def cmp_partial_scene(cif, zone_axis, fov_A, rng):
+        # finite nx x ny supercell patch placed with margins inside a fov-sized scene
+        _struct = Structure.from_file(cmp_cif_dir / cif)
+        _nx, _ny = int(rng.integers(1, 4)), int(rng.integers(1, 3))
+        _pos, _z, _count, _basis = project_structure(
+            _struct, zone_axis, fov_A=float(fov_A),
+            n_exponent=float(_cmp_cfg.data.cif.z_eff_exponent),
+            group_tol_A=float(_cmp_cfg.data.cif.group_tol_A), supercell=(_nx, _ny),
+        )
+        if _pos.shape[0] > 0:
+            _span = _pos.max(dim=0).values - _pos.min(dim=0).values
+            _slack = torch.clamp(torch.tensor(float(fov_A)) - _span, min=0.0)
+            _off = torch.tensor([float(rng.uniform(0.0, float(_slack[0]))),
+                                 float(rng.uniform(0.0, float(_slack[1])))], dtype=_pos.dtype)
+            _pos = _pos - _pos.min(dim=0).values + _off
+        return ColumnList(positions_A=_pos, z=_z, count=_count, fov_A=float(fov_A),
+                          lattice_basis_A=_basis)
+
+
+    def cmp_render(cif, zone_axis, px, n_peak, z_exp, defocus=0.0, astig=0.0,
+                   background=None, col_width=None):
         _fov = 256.0 * float(px)
         _scene = cmp_full_scene(cif, zone_axis, _fov)
-        _cond = replace(IMAGING_CONDITIONS["cond1"],
-                        defocus_A=float(defocus), astig_a1_A=float(astig))
+        _cond = replace(IMAGING_CONDITIONS["cond1"], defocus_A=float(defocus), astig_a1_A=float(astig))
+        if col_width is None:
+            _renderer = cmp_renderer
+        else:
+            _gcfg = OmegaConf.structured(ExperimentConfig).generation
+            _gcfg.sigma_potential_A = float(col_width)
+            _renderer = TEMRenderer(_gcfg)
         _params = RenderParams(
             output_size=256, pixel_size_A=float(px), rotation_deg=0.0,
             z_exponent=float(z_exp),
             background=background or BackgroundSpec(kind="constant", params={}),
             noise=NoiseSpec(n_peak=float(n_peak), scan_freq_cyc_per_row=0.1, scan_beta=0.4),
         )
-        return cmp_renderer.render(_scene, _cond, _params).image
+        return _renderer.render(_scene, _cond, _params).image
 
     return (
         CMP_DEFAULT_STRUCTURE,
         cmp_choices,
+        cmp_full_scene,
         cmp_labels,
+        cmp_partial_scene,
         cmp_render,
         cmp_renderer,
     )
@@ -1213,10 +1242,10 @@ def _(
 def _(mo, real_imgs):
     _maxn = max(1, len(real_imgs))
     cmp_n = mo.ui.slider(1, _maxn, value=min(5, _maxn), step=1, label="num comparisons")
-    cmp_dose = mo.ui.slider(100, 3000, value=1500, step=100, label="dose n_peak (higher=cleaner)")
-    cmp_zexp = mo.ui.slider(1.3, 2.2, value=1.7, step=0.05, label="z-exponent")
-    mo.vstack([cmp_n, cmp_dose, cmp_zexp])
-    return cmp_dose, cmp_n, cmp_zexp
+    cmp_seed = mo.ui.slider(0, 100, value=0, step=1, label="seed (selection + augmentation)")
+    cmp_partial_prob = mo.ui.slider(0.0, 1.0, value=0.4, step=0.05, label="partial-FOV fraction")
+    mo.vstack([cmp_n, cmp_seed, cmp_partial_prob])
+    return cmp_n, cmp_partial_prob, cmp_seed
 
 
 @app.cell(hide_code=True)
@@ -1233,28 +1262,53 @@ def _(CMP_DEFAULT_STRUCTURE, cmp_labels, cmp_n, mo):
 
 @app.cell(hide_code=True)
 def _(
+    AugmentationSampler,
+    ExperimentConfig,
+    IMAGING_CONDITIONS,
+    OmegaConf,
     cmp_choices,
-    cmp_dose,
+    cmp_full_scene,
     cmp_n,
-    cmp_render,
+    cmp_partial_prob,
+    cmp_partial_scene,
+    cmp_renderer,
+    cmp_seed,
     cmp_structures,
-    cmp_zexp,
     go,
     make_subplots,
+    np,
     real_imgs,
     real_indices,
-    real_pixel_sizes,
+    replace,
+    torch,
 ):
+    # Pin cond1 (the only thing params.txt fixes); randomize the rest via the augmentation
+    # sampler (rotation, defocus, astig, background, scan noise, dose, z-exponent, FOV=zoom).
+    # Some rows render a finite particle in vacuum (partial FOV) instead of a full lattice.
+    _acfg = OmegaConf.merge(OmegaConf.structured(ExperimentConfig), OmegaConf.load("configs/default.yaml"))
+    _sampler = AugmentationSampler(_acfg.generation.sampler, master_seed=int(cmp_seed.value))
     _n = min(cmp_n.value, len(real_imgs))
+    _sel = np.random.default_rng(int(cmp_seed.value)).permutation(len(real_imgs))[:_n]
     _titles = []
     _pairs = []
-    for _i in range(_n):
-        _label = cmp_structures.value[_i]
+    for _r, _idx in enumerate(_sel):
+        _idx = int(_idx)
+        _label = cmp_structures.value[_r]
         _cif, _zone = cmp_choices[_label]
-        _px = real_pixel_sizes[_i]
-        _synth = cmp_render(_cif, _zone, _px, n_peak=cmp_dose.value, z_exp=cmp_zexp.value)
-        _pairs.append((real_imgs[_i], _synth))
-        _titles.append(f"#{real_indices[_i]} . {_px:.3f} A/px . {_label}")
+        _cond, _p = _sampler.sample(_idx, max_fov_A=80.0)
+        _fov = _p.output_size * _p.pixel_size_A
+        _rrng = np.random.default_rng(np.random.SeedSequence([int(cmp_seed.value), _idx, 777]))
+        _is_partial = bool(_rrng.random() < cmp_partial_prob.value)
+        if _is_partial:
+            _scene = cmp_partial_scene(_cif, _zone, _fov, _rrng)
+            _p = replace(_p, position_offset_A=torch.zeros(2))  # keep the particle framed
+        else:
+            _scene = cmp_full_scene(_cif, _zone, 80.0)
+        _cond = replace(IMAGING_CONDITIONS["cond1"], defocus_A=_cond.defocus_A,
+                        astig_a1_A=_cond.astig_a1_A, astig_a1_azimuth_rad=_cond.astig_a1_azimuth_rad)
+        _synth = cmp_renderer.render(_scene, _cond, _p).image
+        _pairs.append((real_imgs[_idx], _synth))
+        _titles.append(f"#{real_indices[_idx]} . {_label} . {_fov:.0f}A . {'partial' if _is_partial else 'full'}")
 
     _fig = make_subplots(
         rows=_n, cols=2, column_titles=["reference", "synthetic"],
@@ -1273,8 +1327,8 @@ def _(
                                 showticklabels=False, ticks="")
         _fig.layout[_xk].update(constrain="domain", showticklabels=False, ticks="")
     _fig.update_annotations(font_size=11)
-    _fig.update_layout(height=240 * _n, width=560, margin=dict(l=8, r=90, t=24, b=8),
-                       title_text="Parameter-matched: reference vs synthetic (cond1, in-focus)")
+    _fig.update_layout(height=240 * _n, width=560, margin=dict(l=8, r=120, t=24, b=8),
+                       title_text="Reference vs augmented synthetic (cond1 pinned, rest randomized)")
     _fig
     return
 
