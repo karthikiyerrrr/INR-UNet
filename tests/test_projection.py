@@ -11,6 +11,25 @@ def _pt_fcc():
     return Structure.from_spacegroup("Fm-3m", Lattice.cubic(3.9242), ["Pt"], [[0, 0, 0]])
 
 
+def _graphene():
+    # Hexagonal in-plane cell (gamma = 120 deg), two carbons in the basal plane.
+    return Structure(
+        Lattice.hexagonal(2.461, 10.0),
+        ["C", "C"],
+        [[0.0, 0.0, 0.0], [1 / 3, 2 / 3, 0.0]],
+    )
+
+
+def _empty_occupancy_cells(pos: torch.Tensor, fov_A: float, n: int = 8) -> int:
+    """Number of empty cells when [0, fov]^2 is binned into an n x n occupancy grid."""
+    p = pos.numpy()
+    gx = np.clip((p[:, 0] / fov_A * n).astype(int), 0, n - 1)
+    gy = np.clip((p[:, 1] / fov_A * n).astype(int), 0, n - 1)
+    grid = np.zeros((n, n), dtype=bool)
+    grid[gx, gy] = True
+    return n * n - int(grid.sum())
+
+
 def _srtio3():
     return Structure.from_spacegroup(
         "Pm-3m",
@@ -72,6 +91,15 @@ def test_pt111_is_densely_sampled():
     cosang = torch.dot(basis[0], basis[1]) / (lengths[0] * lengths[1])
     angle = torch.rad2deg(torch.arccos(cosang)).item()
     assert abs(angle - 120.0) < 1.0  # hexagonal frame preserved
+
+
+def test_hexagonal_lattice_fills_the_square_fov():
+    # Regression: graphene/MoS2 ([001], gamma=120 deg) left a triangular vacuum gap in one
+    # corner of the square FOV. The full lattice must cover the whole window with no holes.
+    for fov in (40.0, 56.0, 80.0):
+        pos, *_ = project_structure(_graphene(), [0, 0, 1], fov, 1.7, 0.4)
+        assert _empty_occupancy_cells(pos, fov) == 0, f"empty cells at fov={fov}"
+        assert float(pos.min()) >= -1e-3 and float(pos.max()) <= fov + 1e-3
 
 
 def test_low_index_nets_preserved():

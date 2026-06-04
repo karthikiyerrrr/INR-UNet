@@ -188,7 +188,9 @@ def project_structure(
     if supercell is None:
         slab = (ts >= 0.0) & (ts < beam_period)  # keep exactly one period deep
         pts, zs = pts[slab], zs[slab]
-        pts = pts - pts.min(axis=0)
+        # The tiling already covers the FOV box in the (e1, e2) frame, so crop directly.
+        # Re-anchoring to pts.min would shift by independent x/y extrema of the tiled
+        # parallelogram and carve a triangular gap for non-orthogonal (e.g. hexagonal) cells.
         inside = (
             (pts[:, 0] >= 0.0)
             & (pts[:, 0] <= fov_A)
