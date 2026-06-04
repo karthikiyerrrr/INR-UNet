@@ -29,7 +29,7 @@ def test_imaging_condition_presets():
     assert c1.energy_keV == 200.0
     assert c1.alpha_max_mrad == 24.0
     assert c1.source_size_A == 0.9
-    assert c1.sigma_jitter_A == 0.2
+    assert c1.sigma_jitter_A == 0.1
     assert c1.name == "cond1"
 
 

@@ -66,9 +66,11 @@ generation:
   sigma_potential_A: 0.4
   aperture_soft: true
   sampler:
-    fov_set_A: [8.0, 10.0, 20.0, 30.0, 40.0]
+    fov_set_A: [8.0, 10.0, 16.0, 24.0, 32.0]
     pixel_size_A_min: 0.05
     pixel_size_A_max: 0.30
+    output_size_min: 128
+    output_size_max: 512
     rotation_step_deg: 15.0
     rotation_max_deg: 90.0
     offset_jitter_frac: 0.5
@@ -90,8 +92,8 @@ generation:
     bg_perlin_amp_max: 0.35
     bg_perlin_cells_min: 2
     bg_perlin_cells_max: 6
-    n_peak_min: 15.0
-    n_peak_max: 3000.0
+    n_peak_min: 8.0
+    n_peak_max: 1500.0
     n_bg_frac_max: 0.05
     scan_freq_min: 0.02
     scan_freq_max: 0.5

@@ -75,7 +75,7 @@ class ImagingCondition:
     energy_keV: float
     alpha_max_mrad: float
     source_size_A: float
-    sigma_jitter_A: float = 0.2
+    sigma_jitter_A: float = 0.1
     c3_A: float = 0.0
     c5_A: float = 0.0
     defocus_A: float = 0.0

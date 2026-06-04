@@ -45,7 +45,7 @@ def test_generation_has_sampler():
 
 def test_default_yaml_has_sampler():
     cfg = load_config(CONFIG_PATH)
-    assert cfg.generation.sampler.fov_set_A == [8.0, 10.0, 20.0, 30.0, 40.0]
+    assert cfg.generation.sampler.fov_set_A == [8.0, 10.0, 16.0, 24.0, 32.0]
     assert cfg.generation.sampler.z_exponent_min == 1.5
     assert cfg.generation.sampler.z_exponent_max == 2.0
     assert cfg.generation.sampler.bg_weights["nonlinear"] == 1.0
