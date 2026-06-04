@@ -68,6 +68,7 @@ def _():
         noise_autocorrelation,
         np,
         pathlib,
+        project_structure,
         radial_power_spectrum,
         replace,
         support_mask,
@@ -396,173 +397,117 @@ def _(draws, go, make_subplots):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Datasets — render source -> trainable tensors
+    ### Astigmatism: elliptical columns require defocus
 
-    `SyntheticRenderSource` maps a flat index to a fixed `crop_size`x`crop_size` input
-    (deterministically cropped when the render is larger, reflect-padded when smaller),
-    together with the **analytic** column coordinates inside that crop. Two datasets
-    format it for training:
-
-    - **`STEMSegDataset`** -> `(image[1,S,S], mask[1,S,S])` -- the label field rasterized
-      onto the input grid, for the baseline fixed-resolution UNet.
-    - **`LIIFSegDataset`** -> `(image[1,S,S], coords[Q,2], cell[Q,2], gt[Q,1])` -- `Q`
-      query points with **continuous** `(x, y)` coords (normalized to [-1, 1] over the
-      crop), a physical target pixel size `cell` (A/px), and the label sampled
-      analytically at those exact coordinates. No rasterization -- supervision is
-      resolution-free.
-
-    The label is a **sharp center-marker** (gaussian FWHM 0.2 A, ~1-2 px) -- deliberately
-    far narrower than the PSF-broadened, often background-dominated column in the input.
-    Below, the input row carries red crosses at each labeled column center so the
-    label<->image correspondence is visible (the input and its label share the exact same
-    extent and pixel scale). Everything is reproducible from `master_seed + idx`.
+    A single column rendered at the sampler's **maximum** defocus and astigmatism
+    (`defocus_A_max`, `astig_a1_A_max`), sweeping the 2-fold magnitude `A1` (rows) and
+    azimuth (columns) -- i.e. the strongest ellipticity the current defaults allow; most
+    random draws are milder. At **zero defocus** the column stays circular regardless of
+    `A1`; here defocus is held nonzero, so increasing `A1` stretches the column into an
+    ellipse and rotating the azimuth by 90 deg rotates the ellipse by 90 deg. The axis
+    ratio (from the image second moments) is annotated on each panel.
     """)
     return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    ds_seed = mo.ui.slider(0, 20, value=0, step=1, label="master seed")
-    ds_label = mo.ui.dropdown(options=["gaussian", "circular"], value="gaussian", label="label field")
-    ds_q = mo.ui.slider(256, 4096, value=1024, step=256, label="LIIF query points Q")
-
-    mo.hstack([ds_seed, ds_label, ds_q], justify="start", gap=1)
-    return ds_label, ds_q, ds_seed
 
 
 @app.cell
 def _(
+    BackgroundSpec,
+    ColumnList,
     ExperimentConfig,
-    LIIFSegDataset,
+    IMAGING_CONDITIONS,
+    NoiseSpec,
     OmegaConf,
-    STEMSegDataset,
-    ds_label,
-    ds_q,
-    ds_seed,
+    RenderParams,
+    SamplerConfig,
+    TEMRenderer,
     mo,
+    np,
+    replace,
+    torch,
 ):
-    ds_cfg = OmegaConf.structured(ExperimentConfig)
-    ds_cfg.data.synthetic.n_scenes = 4
-    ds_cfg.data.synthetic.draws_per_scene = 8
-    ds_cfg.data.synthetic.master_seed = int(ds_seed.value)
-    ds_cfg.data.synthetic.label_kind = ds_label.value
-    ds_cfg.data.synthetic.sample_q = int(ds_q.value)
+    _scfg = OmegaConf.structured(SamplerConfig)
+    astig_renderer = TEMRenderer(OmegaConf.structured(ExperimentConfig).generation)
+    astig_defocus_A = float(_scfg.defocus_A_max)
+    astig_mags = [0.0, _scfg.astig_a1_A_max / 2.0, float(_scfg.astig_a1_A_max)]
+    astig_azimuths = [0.0, np.pi / 2]
+    astig_fov_A, astig_px = 10.0, 0.06
+    astig_cols = ColumnList(
+        positions_A=torch.tensor([[astig_fov_A / 2, astig_fov_A / 2]]),
+        z=torch.tensor([60.0]), count=torch.ones(1), fov_A=astig_fov_A,
+    )
+    astig_base = IMAGING_CONDITIONS["cond1"]
+    astig_params = RenderParams(
+        output_size=int(astig_fov_A / astig_px), pixel_size_A=astig_px, rotation_deg=0.0,
+        z_exponent=1.7, background=BackgroundSpec(kind="constant", params={}),
+        noise=NoiseSpec(n_peak=1e9, scan_freq_cyc_per_row=0.0), seed=0,
+    )
 
-    stem_ds = STEMSegDataset(ds_cfg)
-    liif_ds = LIIFSegDataset(ds_cfg)
-    ds_S = stem_ds.source.crop_size
 
-    # Split indices by branch: the render filled the crop (crop) vs needed reflect-pad.
-    ds_crop_idx, ds_pad_idx = [], []
-    for _i in range(len(stem_ds)):
-        _s = stem_ds.source.get(_i)
-        if _s.valid_extent_A < ds_S * _s.input_pixel_size_A - 1e-9:
-            ds_pad_idx.append(_i)
-        else:
-            ds_crop_idx.append(_i)
+    def _axis_ratio(_img):
+        _a = _img.numpy().astype(np.float64)
+        _a = _a - _a.min()
+        _ys, _xs = np.mgrid[0:_a.shape[0], 0:_a.shape[1]]
+        _t = _a.sum()
+        if _t <= 0:
+            return 1.0
+        _my, _mx = (_ys * _a).sum() / _t, (_xs * _a).sum() / _t
+        _cyy = ((_ys - _my) ** 2 * _a).sum() / _t
+        _cxx = ((_xs - _mx) ** 2 * _a).sum() / _t
+        _cxy = ((_xs - _mx) * (_ys - _my) * _a).sum() / _t
+        _w, _ = np.linalg.eigh(np.array([[_cxx, _cxy], [_cxy, _cyy]]))
+        return float((_w.max() / _w.min()) ** 0.5)
 
+
+    astig_panel = []
+    for _mag in astig_mags:
+        _row = []
+        for _az in astig_azimuths:
+            _c = replace(astig_base, defocus_A=astig_defocus_A, astig_a1_A=float(_mag), astig_a1_azimuth_rad=_az)
+            _img = astig_renderer.render(astig_cols, _c, astig_params).image
+            _row.append((_img, _axis_ratio(_img)))
+        astig_panel.append(_row)
     mo.md(
-        f"`{len(stem_ds)}` samples &middot; **{len(ds_crop_idx)}** crop, "
-        f"**{len(ds_pad_idx)}** reflect-pad &middot; input {ds_S}x{ds_S} &middot; "
-        f"Q = {ds_cfg.data.synthetic.sample_q}"
+        f"Rendered the astigmatism sweep at defocus = {int(astig_defocus_A)} A "
+        f"(sampler max), A1 up to {int(astig_mags[-1])} A."
     )
-    return ds_S, ds_crop_idx, ds_pad_idx, liif_ds, stem_ds
+    return astig_azimuths, astig_defocus_A, astig_mags, astig_panel
 
 
 @app.cell(hide_code=True)
-def _(ds_S, ds_crop_idx, ds_label, ds_pad_idx, go, make_subplots, stem_ds):
-    _show = ds_crop_idx[:3] + ds_pad_idx[:1]
-    _titles = [f"#{_i} input + centers" for _i in _show] + [f"#{_i} {ds_label.value} label" for _i in _show]
-    stem_fig = make_subplots(
-        rows=2, cols=len(_show), subplot_titles=_titles,
-        horizontal_spacing=0.02, vertical_spacing=0.12,
-    )
-    for _c, _i in enumerate(_show):
-        _img, _mask = stem_ds[_i]
-        _s = stem_ds.source.get(_i)
-        _ppx = _s.positions_A.numpy() / _s.input_pixel_size_A
-        _in = (_ppx[:, 0] >= 0) & (_ppx[:, 0] < ds_S) & (_ppx[:, 1] >= 0) & (_ppx[:, 1] < ds_S)
-        stem_fig.add_trace(go.Heatmap(z=_img[0].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
-        stem_fig.add_trace(
-            go.Scatter(
-                x=_ppx[_in, 0], y=_ppx[_in, 1], mode="markers",
-                marker=dict(symbol="cross-thin", size=7, color="#ff3b3b", line=dict(width=1.3, color="#ff3b3b")),
-                showlegend=False,
-            ),
-            row=1, col=_c + 1,
-        )
-        stem_fig.add_trace(
-            go.Heatmap(z=_mask[0].numpy(), colorscale="viridis", zmin=0, zmax=1, showscale=False),
-            row=2, col=_c + 1,
-        )
-    _n = 2 * len(_show)
-    for _k in range(1, _n + 1):
-        _xa = "x" if _k == 1 else f"x{_k}"
-        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
-        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
-        stem_fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[ds_S, 0], showticklabels=False, ticks="")
-        stem_fig.layout[_xk].update(constrain="domain", range=[0, ds_S], showticklabels=False, ticks="")
-    stem_fig.update_annotations(font_size=12)
-    stem_fig.update_layout(height=520, width=860, margin=dict(l=8, r=8, t=30, b=8))
-    stem_fig
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### LIIF supervision -- continuous queries over the crop
-
-    Each panel overlays the `Q` query points on its input image, colored by the analytic
-    `gt` at that point (viridis, 0 -> 1). Titles show the **input** pixel size (the
-    encoder's resolution) and the per-item **cell** (the decode target resolution) -- both
-    vary across items, which is exactly the continuous-resolution signal the LIIF head
-    learns from. In **reflect-pad** items the queries stay inside the valid (non-padded)
-    region, so the padded border carries no supervision.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(ds_S, ds_crop_idx, ds_pad_idx, go, liif_ds, make_subplots):
-    _show = ds_crop_idx[:2] + ds_pad_idx[:1]
-    _items = []
-    for _i in _show:
-        _im, _coords, _cell, _gt = liif_ds[_i]
-        _s = liif_ds.source.get(_i)
-        _pad = _s.valid_extent_A < ds_S * _s.input_pixel_size_A - 1e-9
-        _items.append((_i, _im, _coords, _cell, _gt, _s, _pad))
+def _(
+    astig_azimuths,
+    astig_defocus_A,
+    astig_mags,
+    astig_panel,
+    go,
+    make_subplots,
+    np,
+):
     _titles = [
-        f"#{_i} · {'pad' if _pad else 'crop'} · "
-        f"in {_s.input_pixel_size_A:.2f} -> cell {float(_cell[0, 0]):.2f} A/px"
-        for (_i, _im, _coords, _cell, _gt, _s, _pad) in _items
+        f"A1={int(_m)} A, az={int(np.degrees(_az))} deg (r={_ar:.2f})"
+        for _mi, _m in enumerate(astig_mags)
+        for _az, (_img, _ar) in zip(astig_azimuths, astig_panel[_mi])
     ]
-    liif_fig = make_subplots(rows=1, cols=len(_items), subplot_titles=_titles, horizontal_spacing=0.06)
-    for _c, (_i, _im, _coords, _cell, _gt, _s, _pad) in enumerate(_items):
-        _qpx = (_coords.numpy() + 1.0) / 2.0 * ds_S
-        _last = _c == len(_items) - 1
-        liif_fig.add_trace(go.Heatmap(z=_im[0].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
-        liif_fig.add_trace(
-            go.Scatter(
-                x=_qpx[:, 0], y=_qpx[:, 1], mode="markers",
-                marker=dict(
-                    size=4, color=_gt[:, 0].numpy(), colorscale="viridis", cmin=0, cmax=1,
-                    showscale=_last, colorbar=dict(title="gt", thickness=12, len=0.9),
-                ),
-                showlegend=False,
-            ),
-            row=1, col=_c + 1,
-        )
-    _n = len(_items)
+    _fig = make_subplots(rows=len(astig_mags), cols=len(astig_azimuths),
+                         subplot_titles=_titles, horizontal_spacing=0.04, vertical_spacing=0.10)
+    for _mi in range(len(astig_mags)):
+        for _ai in range(len(astig_azimuths)):
+            _img, _ar = astig_panel[_mi][_ai]
+            _fig.add_trace(go.Heatmap(z=_img.numpy(), colorscale="gray", showscale=False),
+                           row=_mi + 1, col=_ai + 1)
+    _n = len(astig_mags) * len(astig_azimuths)
     for _k in range(1, _n + 1):
         _xa = "x" if _k == 1 else f"x{_k}"
         _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
         _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
-        liif_fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[ds_S, 0], showticklabels=False, ticks="")
-        liif_fig.layout[_xk].update(constrain="domain", range=[0, ds_S], showticklabels=False, ticks="")
-    liif_fig.update_annotations(font_size=11)
-    liif_fig.update_layout(height=360, width=900, margin=dict(l=8, r=8, t=34, b=8))
-    liif_fig
+        _fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", autorange="reversed",
+                                showticklabels=False, ticks="")
+        _fig.layout[_xk].update(constrain="domain", showticklabels=False, ticks="")
+    _fig.update_annotations(font_size=11)
+    _fig.update_layout(height=620, width=520, margin=dict(l=8, r=8, t=30, b=8),
+                       title_text=f"2-fold astigmatism at defocus {int(astig_defocus_A)} A")
+    _fig
     return
 
 
@@ -793,6 +738,179 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ## Datasets — render source -> trainable tensors
+
+    `SyntheticRenderSource` maps a flat index to a fixed `crop_size`x`crop_size` input
+    (deterministically cropped when the render is larger, reflect-padded when smaller),
+    together with the **analytic** column coordinates inside that crop. Two datasets
+    format it for training:
+
+    - **`STEMSegDataset`** -> `(image[1,S,S], mask[1,S,S])` -- the label field rasterized
+      onto the input grid, for the baseline fixed-resolution UNet.
+    - **`LIIFSegDataset`** -> `(image[1,S,S], coords[Q,2], cell[Q,2], gt[Q,1])` -- `Q`
+      query points with **continuous** `(x, y)` coords (normalized to [-1, 1] over the
+      crop), a physical target pixel size `cell` (A/px), and the label sampled
+      analytically at those exact coordinates. No rasterization -- supervision is
+      resolution-free.
+
+    The label is a **sharp center-marker** (gaussian FWHM 0.2 A, ~1-2 px) -- deliberately
+    far narrower than the PSF-broadened, often background-dominated column in the input.
+    Below, the input row carries red crosses at each labeled column center so the
+    label<->image correspondence is visible (the input and its label share the exact same
+    extent and pixel scale). Everything is reproducible from `master_seed + idx`.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    ds_seed = mo.ui.slider(0, 20, value=0, step=1, label="master seed")
+    ds_label = mo.ui.dropdown(options=["gaussian", "circular"], value="gaussian", label="label field")
+    ds_q = mo.ui.slider(256, 4096, value=1024, step=256, label="LIIF query points Q")
+
+    mo.hstack([ds_seed, ds_label, ds_q], justify="start", gap=1)
+    return ds_label, ds_q, ds_seed
+
+
+@app.cell
+def _(
+    ExperimentConfig,
+    LIIFSegDataset,
+    OmegaConf,
+    STEMSegDataset,
+    ds_label,
+    ds_q,
+    ds_seed,
+    mo,
+):
+    ds_cfg = OmegaConf.structured(ExperimentConfig)
+    ds_cfg.data.synthetic.n_scenes = 4
+    ds_cfg.data.synthetic.draws_per_scene = 8
+    ds_cfg.data.synthetic.master_seed = int(ds_seed.value)
+    ds_cfg.data.synthetic.label_kind = ds_label.value
+    ds_cfg.data.synthetic.sample_q = int(ds_q.value)
+
+    stem_ds = STEMSegDataset(ds_cfg)
+    liif_ds = LIIFSegDataset(ds_cfg)
+    ds_S = stem_ds.source.crop_size
+
+    # Split indices by branch: the render filled the crop (crop) vs needed reflect-pad.
+    ds_crop_idx, ds_pad_idx = [], []
+    for _i in range(len(stem_ds)):
+        _s = stem_ds.source.get(_i)
+        if _s.valid_extent_A < ds_S * _s.input_pixel_size_A - 1e-9:
+            ds_pad_idx.append(_i)
+        else:
+            ds_crop_idx.append(_i)
+
+    mo.md(
+        f"`{len(stem_ds)}` samples &middot; **{len(ds_crop_idx)}** crop, "
+        f"**{len(ds_pad_idx)}** reflect-pad &middot; input {ds_S}x{ds_S} &middot; "
+        f"Q = {ds_cfg.data.synthetic.sample_q}"
+    )
+    return ds_S, ds_crop_idx, ds_pad_idx, liif_ds, stem_ds
+
+
+@app.cell(hide_code=True)
+def _(ds_S, ds_crop_idx, ds_label, ds_pad_idx, go, make_subplots, stem_ds):
+    _show = ds_crop_idx[:3] + ds_pad_idx[:1]
+    _titles = [f"#{_i} input + centers" for _i in _show] + [f"#{_i} {ds_label.value} label" for _i in _show]
+    stem_fig = make_subplots(
+        rows=2, cols=len(_show), subplot_titles=_titles,
+        horizontal_spacing=0.02, vertical_spacing=0.12,
+    )
+    for _c, _i in enumerate(_show):
+        _img, _mask = stem_ds[_i]
+        _s = stem_ds.source.get(_i)
+        _ppx = _s.positions_A.numpy() / _s.input_pixel_size_A
+        _in = (_ppx[:, 0] >= 0) & (_ppx[:, 0] < ds_S) & (_ppx[:, 1] >= 0) & (_ppx[:, 1] < ds_S)
+        stem_fig.add_trace(go.Heatmap(z=_img[0].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
+        stem_fig.add_trace(
+            go.Scatter(
+                x=_ppx[_in, 0], y=_ppx[_in, 1], mode="markers",
+                marker=dict(symbol="cross-thin", size=7, color="#ff3b3b", line=dict(width=1.3, color="#ff3b3b")),
+                showlegend=False,
+            ),
+            row=1, col=_c + 1,
+        )
+        stem_fig.add_trace(
+            go.Heatmap(z=_mask[0].numpy(), colorscale="viridis", zmin=0, zmax=1, showscale=False),
+            row=2, col=_c + 1,
+        )
+    _n = 2 * len(_show)
+    for _k in range(1, _n + 1):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        stem_fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[ds_S, 0], showticklabels=False, ticks="")
+        stem_fig.layout[_xk].update(constrain="domain", range=[0, ds_S], showticklabels=False, ticks="")
+    stem_fig.update_annotations(font_size=12)
+    stem_fig.update_layout(height=520, width=860, margin=dict(l=8, r=8, t=30, b=8))
+    stem_fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### LIIF supervision -- continuous queries over the crop
+
+    Each panel overlays the `Q` query points on its input image, colored by the analytic
+    `gt` at that point (viridis, 0 -> 1). Titles show the **input** pixel size (the
+    encoder's resolution) and the per-item **cell** (the decode target resolution) -- both
+    vary across items, which is exactly the continuous-resolution signal the LIIF head
+    learns from. In **reflect-pad** items the queries stay inside the valid (non-padded)
+    region, so the padded border carries no supervision.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(ds_S, ds_crop_idx, ds_pad_idx, go, liif_ds, make_subplots):
+    _show = ds_crop_idx[:2] + ds_pad_idx[:1]
+    _items = []
+    for _i in _show:
+        _im, _coords, _cell, _gt = liif_ds[_i]
+        _s = liif_ds.source.get(_i)
+        _pad = _s.valid_extent_A < ds_S * _s.input_pixel_size_A - 1e-9
+        _items.append((_i, _im, _coords, _cell, _gt, _s, _pad))
+    _titles = [
+        f"#{_i} · {'pad' if _pad else 'crop'} · "
+        f"in {_s.input_pixel_size_A:.2f} -> cell {float(_cell[0, 0]):.2f} A/px"
+        for (_i, _im, _coords, _cell, _gt, _s, _pad) in _items
+    ]
+    liif_fig = make_subplots(rows=1, cols=len(_items), subplot_titles=_titles, horizontal_spacing=0.06)
+    for _c, (_i, _im, _coords, _cell, _gt, _s, _pad) in enumerate(_items):
+        _qpx = (_coords.numpy() + 1.0) / 2.0 * ds_S
+        _last = _c == len(_items) - 1
+        liif_fig.add_trace(go.Heatmap(z=_im[0].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
+        liif_fig.add_trace(
+            go.Scatter(
+                x=_qpx[:, 0], y=_qpx[:, 1], mode="markers",
+                marker=dict(
+                    size=4, color=_gt[:, 0].numpy(), colorscale="viridis", cmin=0, cmax=1,
+                    showscale=_last, colorbar=dict(title="gt", thickness=12, len=0.9),
+                ),
+                showlegend=False,
+            ),
+            row=1, col=_c + 1,
+        )
+    _n = len(_items)
+    for _k in range(1, _n + 1):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        liif_fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[ds_S, 0], showticklabels=False, ticks="")
+        liif_fig.layout[_xk].update(constrain="domain", range=[0, ds_S], showticklabels=False, ticks="")
+    liif_fig.update_annotations(font_size=11)
+    liif_fig.update_layout(height=360, width=900, margin=dict(l=8, r=8, t=34, b=8))
+    liif_fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## Visual calibration against real S/TEM images
 
     Tune the forward model **by eye** against a sample of real micrographs from the
@@ -819,22 +937,38 @@ def _(mo):
 
 @app.cell
 def _(Image, mo, np, pathlib, torch):
+    NOMINAL_PIXEL_SIZE_A = 0.26  # fallback when a params file is missing/short
+
     real_paths = sorted(pathlib.Path("data/reference").glob("*.png"))
     real_imgs = []
+    real_pixel_sizes = []
+    real_indices = []
     for _p in real_paths:
         _a = np.asarray(Image.open(_p).convert("L"), dtype=np.float32)
         _t = torch.from_numpy(_a)
         real_imgs.append((_t - _t.min()) / (_t.max() - _t.min() + 1e-12))
+        real_indices.append(int(_p.stem))
+        _pf = _p.parent / "params" / (_p.stem + ".txt")
+        _px = NOMINAL_PIXEL_SIZE_A
+        if _pf.exists():
+            _vals = [float(_v) for _v in _pf.read_text().split()]
+            if len(_vals) > 11:
+                _px = _vals[11]
+        real_pixel_sizes.append(_px)
 
+    _matched = sum(
+        1 for _p in real_paths if (_p.parent / "params" / (_p.stem + ".txt")).exists()
+    )
     mo.md(
         f"Loaded **{len(real_imgs)}** reference images "
-        f"({'x'.join(str(s) for s in real_imgs[0].shape)} px, grayscale, "
-        f"normalized to [0, 1])."
+        f"({'x'.join(str(s) for s in real_imgs[0].shape)} px, grayscale, [0, 1]); "
+        f"pixel size from params for {_matched}/{len(real_imgs)} "
+        f"(range {min(real_pixel_sizes):.3f}-{max(real_pixel_sizes):.3f} A/px)."
         if real_imgs
         else "No reference images found -- run "
         "`uv run python scripts/fetch_reference_images.py --count 50`."
     )
-    return (real_imgs,)
+    return real_imgs, real_indices, real_pixel_sizes
 
 
 @app.cell(hide_code=True)
@@ -991,22 +1125,146 @@ def _(
         f"Z-exponent ~ U[{_s.z_exponent_min:.2f}, {_s.z_exponent_max:.2f}], "
         f"z_eff = {cal_cfg.data.cif.z_eff_exponent:.2f}."
     )
-    return cal_renderer, synth_imgs
+    return (synth_imgs,)
 
 
 @app.cell(hide_code=True)
-def _(go, make_subplots, np, real_imgs, synth_imgs):
-    _rng = np.random.default_rng(3)
-    _n = min(5, len(real_imgs), len(synth_imgs))
-    _ri = _rng.choice(len(real_imgs), size=_n, replace=False)
-    _si = _rng.choice(len(synth_imgs), size=_n, replace=False)
-    _fig = make_subplots(
-        rows=2, cols=_n,
-        horizontal_spacing=0.02, vertical_spacing=0.06,
+def _(mo):
+    mo.md(r"""
+    ### Parameter-matched comparison
+
+    Each reference image from TEM-ImageNet was generated with a single fixed imaging
+    condition (200 kV, 24 mrad, 0.9 A source -- our `cond1`), in focus, with only the
+    **pixel size** varying image-to-image (FOV = 256 x pixel_size ~ 56-74 A). The
+    structure is not recorded in the params, so pick the closest crystal per row; the
+    synthetic side then renders that structure at the reference's exact pixel size, in
+    focus, with dose and z-exponent dialed by eye. Below the matched pairs: synthetic-only
+    capabilities with no counterpart in the reference set.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    BackgroundSpec,
+    ColumnList,
+    ExperimentConfig,
+    IMAGING_CONDITIONS,
+    NoiseSpec,
+    OmegaConf,
+    RenderParams,
+    TEMRenderer,
+    pathlib,
+    project_structure,
+    replace,
+):
+    from pymatgen.core import Structure
+
+    _cmp_cfg = OmegaConf.structured(ExperimentConfig)
+    cmp_renderer = TEMRenderer(_cmp_cfg.generation)
+    cmp_cif_dir = pathlib.Path(_cmp_cfg.data.cif.manifest_path).parent
+    _cmp_manifest = OmegaConf.load(_cmp_cfg.data.cif.manifest_path)
+    _ZONE_NAMES = {(0, 0, 1): "[001]", (1, 1, 0): "[110]", (1, 0, 0): "[100]"}
+
+    # label -> (cif_filename, zone_axis list)
+    cmp_choices = {}
+    for _e in _cmp_manifest.entries:
+        _za = tuple(int(_v) for _v in _e.zone_axis)
+        _label = f"{pathlib.Path(_e.cif).stem} {_ZONE_NAMES.get(_za, str(_za))}"
+        cmp_choices[_label] = (_e.cif, [int(_v) for _v in _e.zone_axis])
+    cmp_labels = list(cmp_choices)
+    CMP_DEFAULT_STRUCTURE = "SrTiO3 [001]"
+
+
+    def cmp_full_scene(cif, zone_axis, fov_A):
+        _struct = Structure.from_file(cmp_cif_dir / cif)
+        _pos, _z, _count, _basis = project_structure(
+            _struct, zone_axis, fov_A=float(fov_A),
+            n_exponent=float(_cmp_cfg.data.cif.z_eff_exponent),
+            group_tol_A=float(_cmp_cfg.data.cif.group_tol_A),
+        )
+        return ColumnList(positions_A=_pos, z=_z, count=_count, fov_A=float(fov_A),
+                          lattice_basis_A=_basis)
+
+
+    def cmp_render(cif, zone_axis, px, n_peak, z_exp, defocus=0.0, astig=0.0, background=None):
+        _fov = 256.0 * float(px)
+        _scene = cmp_full_scene(cif, zone_axis, _fov)
+        _cond = replace(IMAGING_CONDITIONS["cond1"],
+                        defocus_A=float(defocus), astig_a1_A=float(astig))
+        _params = RenderParams(
+            output_size=256, pixel_size_A=float(px), rotation_deg=0.0,
+            z_exponent=float(z_exp),
+            background=background or BackgroundSpec(kind="constant", params={}),
+            noise=NoiseSpec(n_peak=float(n_peak), scan_freq_cyc_per_row=0.1, scan_beta=0.4),
+        )
+        return cmp_renderer.render(_scene, _cond, _params).image
+
+    return (
+        CMP_DEFAULT_STRUCTURE,
+        cmp_choices,
+        cmp_labels,
+        cmp_render,
+        cmp_renderer,
     )
-    for _c in range(_n):
-        _fig.add_trace(go.Heatmap(z=real_imgs[int(_ri[_c])].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
-        _fig.add_trace(go.Heatmap(z=synth_imgs[int(_si[_c])].numpy(), colorscale="gray", showscale=False), row=2, col=_c + 1)
+
+
+@app.cell(hide_code=True)
+def _(mo, real_imgs):
+    _maxn = max(1, len(real_imgs))
+    cmp_n = mo.ui.slider(1, _maxn, value=min(5, _maxn), step=1, label="num comparisons")
+    cmp_dose = mo.ui.slider(100, 3000, value=1500, step=100, label="dose n_peak (higher=cleaner)")
+    cmp_zexp = mo.ui.slider(1.3, 2.2, value=1.7, step=0.05, label="z-exponent")
+    mo.vstack([cmp_n, cmp_dose, cmp_zexp])
+    return cmp_dose, cmp_n, cmp_zexp
+
+
+@app.cell(hide_code=True)
+def _(CMP_DEFAULT_STRUCTURE, cmp_labels, cmp_n, mo):
+    cmp_structures = mo.ui.array(
+        [
+            mo.ui.dropdown(cmp_labels, value=CMP_DEFAULT_STRUCTURE, label=f"row {_i + 1}")
+            for _i in range(cmp_n.value)
+        ]
+    )
+    mo.vstack([mo.md("**Structure per comparison row**"), cmp_structures])
+    return (cmp_structures,)
+
+
+@app.cell(hide_code=True)
+def _(
+    cmp_choices,
+    cmp_dose,
+    cmp_n,
+    cmp_render,
+    cmp_structures,
+    cmp_zexp,
+    go,
+    make_subplots,
+    real_imgs,
+    real_indices,
+    real_pixel_sizes,
+):
+    _n = min(cmp_n.value, len(real_imgs))
+    _titles = []
+    _pairs = []
+    for _i in range(_n):
+        _label = cmp_structures.value[_i]
+        _cif, _zone = cmp_choices[_label]
+        _px = real_pixel_sizes[_i]
+        _synth = cmp_render(_cif, _zone, _px, n_peak=cmp_dose.value, z_exp=cmp_zexp.value)
+        _pairs.append((real_imgs[_i], _synth))
+        _titles.append(f"#{real_indices[_i]} . {_px:.3f} A/px . {_label}")
+
+    _fig = make_subplots(
+        rows=_n, cols=2, column_titles=["reference", "synthetic"],
+        row_titles=_titles, horizontal_spacing=0.02, vertical_spacing=0.04,
+    )
+    for _i, (_real, _synth) in enumerate(_pairs):
+        _fig.add_trace(go.Heatmap(z=_real.numpy(), colorscale="gray", showscale=False),
+                       row=_i + 1, col=1)
+        _fig.add_trace(go.Heatmap(z=_synth.numpy(), colorscale="gray", zmin=0.0, zmax=1.0,
+                                  showscale=False), row=_i + 1, col=2)
     for _k in range(1, 2 * _n + 1):
         _xa = "x" if _k == 1 else f"x{_k}"
         _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
@@ -1014,9 +1272,73 @@ def _(go, make_subplots, np, real_imgs, synth_imgs):
         _fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", autorange="reversed",
                                 showticklabels=False, ticks="")
         _fig.layout[_xk].update(constrain="domain", showticklabels=False, ticks="")
-    _fig.update_annotations(font_size=12)
-    _fig.update_layout(height=380, width=860, margin=dict(l=8, r=24, t=22, b=8),
-                       title_text="Reference (top) vs synthetic (bottom)")
+    _fig.update_annotations(font_size=11)
+    _fig.update_layout(height=240 * _n, width=560, margin=dict(l=8, r=90, t=24, b=8),
+                       title_text="Parameter-matched: reference vs synthetic (cond1, in-focus)")
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    BackgroundSpec,
+    CIFProvider,
+    ExperimentConfig,
+    IMAGING_CONDITIONS,
+    NoiseSpec,
+    OmegaConf,
+    RenderParams,
+    cmp_render,
+    cmp_renderer,
+    go,
+    make_subplots,
+):
+    _cfg = OmegaConf.structured(ExperimentConfig)
+    _px = 0.25
+    _base = ("SrTiO3.cif", [0, 0, 1])
+
+    # partial-FOV pillar via CIFProvider (entry 0 = Pt [001]); fixed FOV so it is deterministic.
+    _pp = CIFProvider(
+        manifest_path=str(_cfg.data.cif.manifest_path), n_scenes=12, master_seed=5,
+        n_exponent=float(_cfg.data.cif.z_eff_exponent),
+        group_tol_A=float(_cfg.data.cif.group_tol_A),
+        scene_fov_A=(256.0 * _px, 256.0 * _px), rotation_jitter_deg=0.0, partial_fov_prob=1.0,
+    )
+    _scene_pp = _pp.get(0)
+    _partial = cmp_renderer.render(
+        _scene_pp, IMAGING_CONDITIONS["cond1"],
+        RenderParams(output_size=256, pixel_size_A=_px, z_exponent=1.7,
+                     background=BackgroundSpec(kind="constant", params={}),
+                     noise=NoiseSpec(n_peak=1500.0)),
+    ).image
+
+    _tiles = [
+        ("graphene [001]", cmp_render("graphene.cif", [0, 0, 1], _px, 1500, 1.7)),
+        ("MoS2 [001]", cmp_render("MoS2.cif", [0, 0, 1], _px, 1500, 1.7)),
+        ("partial FOV (Pt pillar)", _partial),
+        ("Perlin background", cmp_render(*_base, _px, 1500, 1.7,
+                                         background=BackgroundSpec(kind="perlin",
+                                                                   params={"amp": 0.3, "cells": 4}))),
+        ("defocus 30 A", cmp_render(*_base, _px, 1500, 1.7, defocus=30.0)),
+        ("astig 30 A", cmp_render(*_base, _px, 1500, 1.7, defocus=30.0, astig=30.0)),
+        ("low dose (n_peak=30)", cmp_render(*_base, _px, 30, 1.7)),
+    ]
+
+    _fig = make_subplots(rows=1, cols=len(_tiles),
+                         subplot_titles=[_t for _t, _ in _tiles], horizontal_spacing=0.01)
+    for _i, (_t, _img) in enumerate(_tiles):
+        _fig.add_trace(go.Heatmap(z=_img.numpy(), colorscale="gray", zmin=0.0, zmax=1.0,
+                                  showscale=False), row=1, col=_i + 1)
+    for _k in range(1, len(_tiles) + 1):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        _fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", autorange="reversed",
+                                showticklabels=False, ticks="")
+        _fig.layout[_xk].update(constrain="domain", showticklabels=False, ticks="")
+    _fig.update_annotations(font_size=10)
+    _fig.update_layout(height=200, width=140 * len(_tiles), margin=dict(l=8, r=8, t=28, b=8),
+                       title_text="Synthetic-only capabilities (no reference-set counterpart)")
     _fig
     return
 
@@ -1097,121 +1419,6 @@ def _(
     _fig.update_xaxes(title_text="lag (px)", row=1, col=3)
     _fig.update_layout(height=340, width=1000, margin=dict(l=8, r=8, t=40, b=8),
                        legend=dict(x=0.30, y=0.98, xanchor="right", yanchor="top"))
-    _fig
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### Astigmatism: elliptical columns require defocus
-
-    A single column rendered at the sampler's **maximum** defocus and astigmatism
-    (`defocus_A_max`, `astig_a1_A_max`), sweeping the 2-fold magnitude `A1` (rows) and
-    azimuth (columns) -- i.e. the strongest ellipticity the current defaults allow; most
-    random draws are milder. At **zero defocus** the column stays circular regardless of
-    `A1`; here defocus is held nonzero, so increasing `A1` stretches the column into an
-    ellipse and rotating the azimuth by 90 deg rotates the ellipse by 90 deg. The axis
-    ratio (from the image second moments) is annotated on each panel.
-    """)
-    return
-
-
-@app.cell
-def _(
-    BackgroundSpec,
-    ColumnList,
-    IMAGING_CONDITIONS,
-    NoiseSpec,
-    OmegaConf,
-    RenderParams,
-    SamplerConfig,
-    cal_renderer,
-    mo,
-    np,
-    replace,
-    torch,
-):
-    _scfg = OmegaConf.structured(SamplerConfig)
-    astig_defocus_A = float(_scfg.defocus_A_max)
-    astig_mags = [0.0, _scfg.astig_a1_A_max / 2.0, float(_scfg.astig_a1_A_max)]
-    astig_azimuths = [0.0, np.pi / 2]
-    astig_fov_A, astig_px = 10.0, 0.06
-    astig_cols = ColumnList(
-        positions_A=torch.tensor([[astig_fov_A / 2, astig_fov_A / 2]]),
-        z=torch.tensor([60.0]), count=torch.ones(1), fov_A=astig_fov_A,
-    )
-    astig_base = IMAGING_CONDITIONS["cond1"]
-    astig_params = RenderParams(
-        output_size=int(astig_fov_A / astig_px), pixel_size_A=astig_px, rotation_deg=0.0,
-        z_exponent=1.7, background=BackgroundSpec(kind="constant", params={}),
-        noise=NoiseSpec(n_peak=1e9, scan_freq_cyc_per_row=0.0), seed=0,
-    )
-
-
-    def _axis_ratio(_img):
-        _a = _img.numpy().astype(np.float64)
-        _a = _a - _a.min()
-        _ys, _xs = np.mgrid[0:_a.shape[0], 0:_a.shape[1]]
-        _t = _a.sum()
-        if _t <= 0:
-            return 1.0
-        _my, _mx = (_ys * _a).sum() / _t, (_xs * _a).sum() / _t
-        _cyy = ((_ys - _my) ** 2 * _a).sum() / _t
-        _cxx = ((_xs - _mx) ** 2 * _a).sum() / _t
-        _cxy = ((_xs - _mx) * (_ys - _my) * _a).sum() / _t
-        _w, _ = np.linalg.eigh(np.array([[_cxx, _cxy], [_cxy, _cyy]]))
-        return float((_w.max() / _w.min()) ** 0.5)
-
-
-    astig_panel = []
-    for _mag in astig_mags:
-        _row = []
-        for _az in astig_azimuths:
-            _c = replace(astig_base, defocus_A=astig_defocus_A, astig_a1_A=float(_mag), astig_a1_azimuth_rad=_az)
-            _img = cal_renderer.render(astig_cols, _c, astig_params).image
-            _row.append((_img, _axis_ratio(_img)))
-        astig_panel.append(_row)
-    mo.md(
-        f"Rendered the astigmatism sweep at defocus = {int(astig_defocus_A)} A "
-        f"(sampler max), A1 up to {int(astig_mags[-1])} A."
-    )
-    return astig_azimuths, astig_defocus_A, astig_mags, astig_panel
-
-
-@app.cell(hide_code=True)
-def _(
-    astig_azimuths,
-    astig_defocus_A,
-    astig_mags,
-    astig_panel,
-    go,
-    make_subplots,
-    np,
-):
-    _titles = [
-        f"A1={int(_m)} A, az={int(np.degrees(_az))} deg (r={_ar:.2f})"
-        for _mi, _m in enumerate(astig_mags)
-        for _az, (_img, _ar) in zip(astig_azimuths, astig_panel[_mi])
-    ]
-    _fig = make_subplots(rows=len(astig_mags), cols=len(astig_azimuths),
-                         subplot_titles=_titles, horizontal_spacing=0.04, vertical_spacing=0.10)
-    for _mi in range(len(astig_mags)):
-        for _ai in range(len(astig_azimuths)):
-            _img, _ar = astig_panel[_mi][_ai]
-            _fig.add_trace(go.Heatmap(z=_img.numpy(), colorscale="gray", showscale=False),
-                           row=_mi + 1, col=_ai + 1)
-    _n = len(astig_mags) * len(astig_azimuths)
-    for _k in range(1, _n + 1):
-        _xa = "x" if _k == 1 else f"x{_k}"
-        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
-        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
-        _fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", autorange="reversed",
-                                showticklabels=False, ticks="")
-        _fig.layout[_xk].update(constrain="domain", showticklabels=False, ticks="")
-    _fig.update_annotations(font_size=11)
-    _fig.update_layout(height=620, width=520, margin=dict(l=8, r=8, t=30, b=8),
-                       title_text=f"2-fold astigmatism at defocus {int(astig_defocus_A)} A")
     _fig
     return
 
