@@ -11,12 +11,19 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 _REPO = "xinhuolin/TEM-ImageNet-v1.3"
 _DIR = "image"
 _API = f"https://api.github.com/repos/{_REPO}/contents/{_DIR}"
+
+
+def params_download_url(image_download_url: str) -> str:
+    """Map an ``image/NNNNN.<ext>`` download URL to its ``params/NNNNN.txt`` sibling."""
+    base = image_download_url.replace("/image/", "/params/")
+    return base.rsplit(".", 1)[0] + ".txt"
 
 
 def _list_images() -> list[dict]:
@@ -47,11 +54,20 @@ def main() -> None:
         selected = random.Random(args.seed).sample(images, count)  # noqa: S311 (not cryptographic)
         selected.sort(key=lambda e: e["name"])
     print(f"Found {len(images)} images; downloading {len(selected)} to {args.out}/")
+    params_dir = args.out / "params"
+    params_dir.mkdir(parents=True, exist_ok=True)
+    n_params = 0
     for entry in selected:
         dest = args.out / entry["name"]
         urllib.request.urlretrieve(entry["download_url"], dest)  # noqa: S310
+        pdest = params_dir / (Path(entry["name"]).stem + ".txt")
+        try:
+            urllib.request.urlretrieve(params_download_url(entry["download_url"]), pdest)  # noqa: S310
+            n_params += 1
+        except urllib.error.URLError as exc:
+            print(f"  (no params for {entry['name']}: {exc})")
         print(f"  {entry['name']}")
-    print(f"Done: {len(selected)} images in {args.out}/")
+    print(f"Done: {len(selected)} images, {n_params} params files in {args.out}/")
 
 
 if __name__ == "__main__":
