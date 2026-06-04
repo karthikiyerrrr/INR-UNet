@@ -44,7 +44,7 @@ data:
     supercell_nx_range: [1, 3]
     supercell_ny_range: [1, 2]
   occupancy:
-    mode: full
+    mode: mix
     mix_weights:
       full: 0.87
       facet_polygon: 0.10
@@ -90,7 +90,7 @@ generation:
     bg_perlin_amp_max: 0.35
     bg_perlin_cells_min: 2
     bg_perlin_cells_max: 6
-    n_peak_min: 30.0
+    n_peak_min: 15.0
     n_peak_max: 3000.0
     n_bg_frac_max: 0.05
     scan_freq_min: 0.02

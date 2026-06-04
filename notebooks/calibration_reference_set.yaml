@@ -1,0 +1,113 @@
+# TEMImageNet visual-calibration reference set.
+# Generated handle for data/reference/ (gitignored PNGs). See 'source.note'.
+source:
+  repo: xinhuolin/TEM-ImageNet-v1.3
+  image_dir: image
+  params_dir: params
+  note: Real ADF-STEM micrographs used as the visual-calibration reference set in notebooks/temimagenet_explorer.py.
+    data/reference/ holds only the PNGs and is gitignored; this file is the durable handle. Re-fetch params/NNNNN.txt
+    from the repo using the indices below to recover per-image acquisition parameters.
+fetch: uv run python scripts/fetch_reference_images.py --count 50 --seed 0
+count: 50
+indices:
+- 42
+- 76
+- 98
+- 102
+- 104
+- 143
+- 144
+- 151
+- 224
+- 257
+- 266
+- 289
+- 311
+- 318
+- 339
+- 363
+- 367
+- 395
+- 415
+- 431
+- 484
+- 489
+- 498
+- 517
+- 524
+- 546
+- 574
+- 598
+- 617
+- 634
+- 701
+- 723
+- 748
+- 774
+- 777
+- 803
+- 819
+- 830
+- 850
+- 865
+- 871
+- 912
+- 914
+- 921
+- 924
+- 930
+- 932
+- 941
+- 989
+- 992
+files:
+- 00042.png
+- 00076.png
+- 00098.png
+- 00102.png
+- 00104.png
+- 00143.png
+- 00144.png
+- 00151.png
+- 00224.png
+- 00257.png
+- 00266.png
+- 00289.png
+- 00311.png
+- 00318.png
+- 00339.png
+- 00363.png
+- 00367.png
+- 00395.png
+- 00415.png
+- 00431.png
+- 00484.png
+- 00489.png
+- 00498.png
+- 00517.png
+- 00524.png
+- 00546.png
+- 00574.png
+- 00598.png
+- 00617.png
+- 00634.png
+- 00701.png
+- 00723.png
+- 00748.png
+- 00774.png
+- 00777.png
+- 00803.png
+- 00819.png
+- 00830.png
+- 00850.png
+- 00865.png
+- 00871.png
+- 00912.png
+- 00914.png
+- 00921.png
+- 00924.png
+- 00930.png
+- 00932.png
+- 00941.png
+- 00989.png
+- 00992.png

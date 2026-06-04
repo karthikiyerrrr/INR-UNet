@@ -32,7 +32,11 @@ def _():
         TEMRenderer,
         project_structure,
     )
-    from inr_unet.data.generation.calibration import intensity_histogram, radial_power_spectrum
+    from inr_unet.data.generation.calibration import (
+            intensity_histogram,
+            noise_autocorrelation,
+            radial_power_spectrum,
+        )
     from inr_unet.data.generation.labels import column_radius
     from inr_unet.data.generation.psf import wavelength_A
     from inr_unet.data.generation.structures import BackgroundSpec, ImagingCondition, NoiseSpec
@@ -61,6 +65,7 @@ def _():
         intensity_histogram,
         make_subplots,
         mo,
+        noise_autocorrelation,
         np,
         pathlib,
         radial_power_spectrum,
@@ -595,9 +600,9 @@ def _(CIFProvider, ExperimentConfig, OmegaConf, cif_seed, mo):
     cif_cfg = OmegaConf.structured(ExperimentConfig)
     cif_prov = CIFProvider(
         manifest_path=str(cif_cfg.data.cif.manifest_path),
-        n_scenes=10,
+        n_scenes=12,
         master_seed=int(cif_seed.value),
-        n_exponent=float(cif_cfg.generation.sampler.z_exponent),
+        n_exponent=float(cif_cfg.data.cif.z_eff_exponent),
         group_tol_A=float(cif_cfg.data.cif.group_tol_A),
         scene_fov_A=(float(cif_cfg.data.cif.scene_fov_A_min), float(cif_cfg.data.cif.scene_fov_A_max)),
         rotation_jitter_deg=float(cif_cfg.data.cif.rotation_jitter_deg),
@@ -609,15 +614,12 @@ def _(CIFProvider, ExperimentConfig, OmegaConf, cif_seed, mo):
         "{}[{}]".format(e["cif"].replace(".cif", ""), "".join(str(x) for x in e["zone_axis"]))
         for e in _entries
     ]
-    cif_scenes = [cif_prov.get(_i) for _i in range(10)]
+    cif_scenes = [cif_prov.get(_i) for _i in range(12)]
+    _cif_nmin = min(s.positions_A.shape[0] for s in cif_scenes)
+    _cif_nmax = max(s.positions_A.shape[0] for s in cif_scenes)
     mo.md(
-        "Projected **{}** bundled structures &middot; {}-{} columns/scene &middot; "
-        "effective-Z reduction with n = {}".format(
-            len(cif_scenes),
-            min(s.positions_A.shape[0] for s in cif_scenes),
-            max(s.positions_A.shape[0] for s in cif_scenes),
-            cif_cfg.generation.sampler.z_exponent,
-        )
+        f"Projected **{len(cif_scenes)}** bundled structures &middot; {_cif_nmin}-{_cif_nmax} "
+        f"columns/scene &middot; effective-Z reduction with n = {cif_cfg.data.cif.z_eff_exponent}"
     )
     return cif_labels, cif_scenes
 
@@ -625,11 +627,11 @@ def _(CIFProvider, ExperimentConfig, OmegaConf, cif_seed, mo):
 @app.cell(hide_code=True)
 def _(cif_labels, cif_scenes, go, make_subplots, np):
     cif_gallery = make_subplots(
-        rows=2, cols=5, subplot_titles=cif_labels,
+        rows=2, cols=6, subplot_titles=cif_labels,
         horizontal_spacing=0.02, vertical_spacing=0.10,
     )
     for _k, _sc in enumerate(cif_scenes):
-        _row, _col = _k // 5 + 1, _k % 5 + 1
+        _row, _col = _k // 6 + 1, _k % 6 + 1
         _p = _sc.positions_A.numpy()
         cif_gallery.add_trace(
             go.Scatter(
@@ -648,7 +650,7 @@ def _(cif_labels, cif_scenes, go, make_subplots, np):
                            line=dict(color="#00e5ff", width=2), showlegend=False),
                 row=_row, col=_col,
             )
-    for _k in range(1, 11):
+    for _k in range(1, 13):
         _xa = "x" if _k == 1 else f"x{_k}"
         _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
         _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
@@ -793,17 +795,24 @@ def _(mo):
     mo.md(r"""
     ## Visual calibration against real S/TEM images
 
-    The forward model is tuned by eye against a sample of real micrographs from the
-    `TEM-ImageNet` set (`data/reference/`, fetched by `scripts/fetch_reference_images.py`).
-    Two checks: a **side-by-side gallery** (do synthetic crops read as the same kind of
-    image?) and **pooled summary statistics** -- an intensity histogram and an
-    azimuthally-averaged power spectrum overlaying the real and synthetic distributions.
+    Tune the forward model **by eye** against a sample of real micrographs from the
+    `TEM-ImageNet` set (`data/reference/`). The sliders below drive the paused and the
+    newly-added knobs; scrub them until the synthetic distributions track the real ones,
+    then read off the values and persist them to `configs/default.yaml`.
 
-    The augmentation sampler now also draws, per render, a **defocus** and a **2-fold
-    astigmatism** (magnitude + azimuth), so columns are no longer perfectly circular.
-    Astigmatism is only visible **away from focus** -- at the mean focal plane the probe
-    is the near-circular disk of least confusion -- which is why a defocus is drawn
-    alongside it. The final panel makes that dependence explicit.
+    Three pooled checks overlay **real (blue)** vs **synthetic (red)**:
+
+    - **intensity histogram** — pixel-value density on a *fixed* `[0, 1]` range, so the
+      two are directly comparable (contrast, dark floor, saturation tail).
+    - **radial power spectrum** — azimuthally-averaged `|FFT|^2`; lattice peaks and the
+      high-frequency noise floor.
+    - **noise autocorrelation** — mean autocorrelation lag slice. **x-lag (solid)** is
+      along the scan rows, **y-lag (dotted)** across them. Real ADF shows *elevated x-lag*
+      at small lags (row-correlated scan noise) that the synthetic should approach.
+
+    Scene coverage spans grids, real CIF lattices (now incl. graphene / MoS2), occupancy-
+    clipped finite particles, and the partial-FOV "pillar-in-vacuum" path. Each render
+    also draws a per-image **defocus + 2-fold astigmatism** and a per-render **Z-exponent**.
     """)
     return
 
@@ -828,6 +837,51 @@ def _(Image, mo, np, pathlib, torch):
     return (real_imgs,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Calibration tuning knobs. Defaults = current configs/default.yaml; scrub to match real.
+    cal_master_seed = mo.ui.slider(0, 30, value=7, step=1, label="master seed")
+    cal_n_synth = mo.ui.slider(8, 48, value=24, step=4, label="num synthetic")
+    # paused knobs (current defaults: 30 / 0.05 / 0.40 / 0.30)
+    cal_n_peak_min = mo.ui.slider(8, 100, value=15, step=2, label="n_peak_min (dose floor)")
+    cal_n_peak_max = mo.ui.slider(500, 3000, value=3000, step=100, label="n_peak_max (dose ceil)")
+    cal_n_bg_frac_max = mo.ui.slider(0.0, 0.30, value=0.05, step=0.01, label="n_bg_frac_max (dark floor)")
+    cal_bg_const_max = mo.ui.slider(0.10, 0.70, value=0.40, step=0.05, label="bg_constant_c_max")
+    cal_bg_ramp_max = mo.ui.slider(0.10, 0.60, value=0.30, step=0.05, label="bg_ramp_c0_max")
+    # new knobs
+    cal_perlin_amp_max = mo.ui.slider(0.10, 0.60, value=0.35, step=0.05, label="bg_perlin_amp_max")
+    cal_perlin_cells_max = mo.ui.slider(3, 10, value=6, step=1, label="bg_perlin_cells_max")
+    cal_perlin_w = mo.ui.slider(0.0, 3.0, value=1.0, step=0.5, label="perlin bg weight")
+    cal_partial_fov_prob = mo.ui.slider(0.0, 0.6, value=0.0, step=0.05, label="partial_fov_prob")
+    cal_zexp_min = mo.ui.slider(1.3, 1.9, value=1.5, step=0.05, label="z_exponent_min")
+    cal_zexp_max = mo.ui.slider(1.6, 2.2, value=2.0, step=0.05, label="z_exponent_max")
+    cal_z_eff = mo.ui.slider(1.3, 2.0, value=1.7, step=0.05, label="z_eff_exponent (projection)")
+
+    mo.vstack([
+        mo.hstack([cal_master_seed, cal_n_synth], justify="start", gap=1),
+        mo.hstack([cal_n_peak_min, cal_n_peak_max, cal_n_bg_frac_max, cal_bg_const_max, cal_bg_ramp_max],
+                  justify="start", gap=1),
+        mo.hstack([cal_perlin_amp_max, cal_perlin_cells_max, cal_perlin_w, cal_partial_fov_prob],
+                  justify="start", gap=1),
+        mo.hstack([cal_zexp_min, cal_zexp_max, cal_z_eff], justify="start", gap=1),
+    ])
+    return (
+        cal_bg_const_max,
+        cal_bg_ramp_max,
+        cal_master_seed,
+        cal_n_bg_frac_max,
+        cal_n_peak_max,
+        cal_n_peak_min,
+        cal_n_synth,
+        cal_perlin_amp_max,
+        cal_perlin_cells_max,
+        cal_perlin_w,
+        cal_z_eff,
+        cal_zexp_max,
+        cal_zexp_min,
+    )
+
+
 @app.cell
 def _(
     AugmentationSampler,
@@ -838,58 +892,104 @@ def _(
     OmegaConf,
     SyntheticLatticeProvider,
     TEMRenderer,
+    cal_bg_const_max,
+    cal_bg_ramp_max,
+    cal_master_seed,
+    cal_n_bg_frac_max,
+    cal_n_peak_max,
+    cal_n_peak_min,
+    cal_n_synth,
+    cal_perlin_amp_max,
+    cal_perlin_cells_max,
+    cal_perlin_w,
+    cal_z_eff,
+    cal_zexp_max,
+    cal_zexp_min,
     mo,
     np,
-    real_imgs,
     replace,
+    torch,
 ):
-    # Tuning candidates for configs/default.yaml (Task 8): widen the noisy / low-contrast tail.
+    # Build a config from the calibration sliders, then render synthetic micrographs across
+    # every scene kind the training pipeline produces (grids, occupancy-clipped particles, real
+    # CIF lattices incl. graphene/MoS2, and the partial-FOV pillar path).
     cal_cfg = OmegaConf.structured(ExperimentConfig)
-    cal_cfg.generation.sampler.n_peak_min = 8.0       # was 30  -- lower dose floor => noisier extreme
-    cal_cfg.generation.sampler.n_bg_frac_max = 0.18   # was 0.05 -- higher dark floor => lower contrast
-    cal_cfg.generation.sampler.bg_constant_c_max = 0.55  # was 0.40 -- stronger flat background
-    cal_cfg.generation.sampler.bg_ramp_c0_max = 0.45     # was 0.30 -- stronger ramp background
-    cal_sampler = AugmentationSampler(cal_cfg.generation.sampler, master_seed=7)
+    _s = cal_cfg.generation.sampler
+    _s.n_peak_min = float(cal_n_peak_min.value)
+    _s.n_peak_max = float(cal_n_peak_max.value)
+    _s.n_bg_frac_max = float(cal_n_bg_frac_max.value)
+    _s.bg_constant_c_max = float(cal_bg_const_max.value)
+    _s.bg_ramp_c0_max = float(cal_bg_ramp_max.value)
+    _s.bg_perlin_amp_max = float(cal_perlin_amp_max.value)
+    _s.bg_perlin_cells_max = int(cal_perlin_cells_max.value)
+    _s.bg_weights["perlin"] = float(cal_perlin_w.value)
+    _s.z_exponent_min = float(cal_zexp_min.value)
+    _s.z_exponent_max = float(cal_zexp_max.value)
+    cal_cfg.data.cif.z_eff_exponent = float(cal_z_eff.value)
+
+    cal_sampler = AugmentationSampler(_s, master_seed=int(cal_master_seed.value))
     cal_renderer = TEMRenderer(cal_cfg.generation)
 
-    # Scene sources mirror the training pipeline: square grids, real CIF lattices, and
-    # occupancy-clipped finite particles (edges + vacuum) -- not just a single grid.
     _occ_blob = OmegaConf.structured(OccupancyConfig)
     _occ_blob.mode = "blob"
     _occ_facet = OmegaConf.structured(OccupancyConfig)
     _occ_facet.mode = "facet_polygon"
     _syn = cal_cfg.data.synthetic
     _cifkw = dict(
-        manifest_path=str(cal_cfg.data.cif.manifest_path), n_scenes=24,
-        n_exponent=float(cal_cfg.generation.sampler.z_exponent),
+        manifest_path=str(cal_cfg.data.cif.manifest_path), n_scenes=64,
+        n_exponent=float(cal_cfg.data.cif.z_eff_exponent),
         group_tol_A=float(cal_cfg.data.cif.group_tol_A),
         scene_fov_A=(float(cal_cfg.data.cif.scene_fov_A_min), float(cal_cfg.data.cif.scene_fov_A_max)),
         rotation_jitter_deg=float(cal_cfg.data.cif.rotation_jitter_deg),
+    )
+    _cifkw_partial = dict(
+        _cifkw, partial_fov_prob=1.0,
+        supercell_nx_range=tuple(cal_cfg.data.cif.supercell_nx_range),
+        supercell_ny_range=tuple(cal_cfg.data.cif.supercell_ny_range),
     )
     cal_sources = [
         ("grid", SyntheticLatticeProvider(_syn, 7)),
         ("grid+occ", FiniteSupportProvider(SyntheticLatticeProvider(_syn, 8), _occ_blob, 8)),
         ("cif", CIFProvider(master_seed=11, **_cifkw)),
         ("cif+facet", FiniteSupportProvider(CIFProvider(master_seed=12, **_cifkw), _occ_facet, 12)),
+        ("cif+partial", CIFProvider(master_seed=13, **_cifkw_partial)),
     ]
 
-    _n_synth = min(len(real_imgs), 24) or 16
+    _n_synth = int(cal_n_synth.value)
     synth_imgs = []
     synth_meta = []
     for _i in range(_n_synth):
         _kind, _prov = cal_sources[_i % len(cal_sources)]
         _scene = _prov.get(_i)
         _cond, _p = cal_sampler.sample(_i, max_fov_A=float(_scene.fov_A))
-        _p = replace(_p, output_size=256, pixel_size_A=float(_scene.fov_A) / 256)
-        synth_imgs.append(cal_renderer.render(_scene, _cond, _p).image)
-        synth_meta.append((_kind, _cond.defocus_A, _cond.astig_a1_A, _p.noise.n_peak))
+        _fov_render = float(_p.output_size * _p.pixel_size_A)  # sampler crop FOV (<= scene); training scale
+        _p = replace(_p, output_size=256, pixel_size_A=_fov_render / 256)
+        _out = cal_renderer.render(_scene, _cond, _p)
+        # If the sampled crop shows no columns inside the visible window (e.g. a partial-FOV pillar
+        # in vacuum landed off-frame), recenter on the structure centroid and re-render -- mirrors
+        # the training source's columns-in-crop guarantee so we never display a pure-noise crop.
+        _q = _out.positions_A
+        _w = _out.image.shape[0] * _p.pixel_size_A
+        _n_vis = int(((_q >= 0) & (_q <= _w)).all(dim=1).sum()) if _q.shape[0] else 0
+        if _n_vis == 0 and _scene.positions_A.shape[0] > 0:
+            _ctr = _scene.positions_A.mean(dim=0)
+            _scn = _scene.fov_A / 2.0
+            _th = float(np.radians(_p.rotation_deg))
+            _rot = torch.tensor([[np.cos(_th), -np.sin(_th)], [np.sin(_th), np.cos(_th)]],
+                                dtype=_scene.positions_A.dtype)
+            _p = replace(_p, position_offset_A=-((_ctr - _scn) @ _rot.T))
+            _out = cal_renderer.render(_scene, _cond, _p)
+        synth_imgs.append(_out.image)
+        synth_meta.append((_kind, _cond.defocus_A, _cond.astig_a1_A, _p.noise.n_peak, _fov_render))
 
     _npeak = np.array([_m[3] for _m in synth_meta])
     mo.md(
         f"Rendered **{len(synth_imgs)}** synthetic 256x256 micrographs across "
-        f"{len(cal_sources)} scene kinds ({', '.join(k for k, _ in cal_sources)}) -- grids, real "
-        f"lattices, and finite particles. Dose n_peak in [{_npeak.min():.0f}, {_npeak.max():.0f}] "
-        f"(lower = noisier); background and dark-floor ceilings raised for a lower-contrast tail."
+        f"{len(cal_sources)} scene kinds ({', '.join(k for k, _ in cal_sources)}). "
+        f"Dose n_peak in [{_npeak.min():.0f}, {_npeak.max():.0f}] (lower = noisier); "
+        f"crop FOV in [{min(m[4] for m in synth_meta):.0f}, {max(m[4] for m in synth_meta):.0f}] A; "
+        f"Z-exponent ~ U[{_s.z_exponent_min:.2f}, {_s.z_exponent_max:.2f}], "
+        f"z_eff = {cal_cfg.data.cif.z_eff_exponent:.2f}."
     )
     return cal_renderer, synth_imgs
 
@@ -901,7 +1001,7 @@ def _(go, make_subplots, np, real_imgs, synth_imgs):
     _ri = _rng.choice(len(real_imgs), size=_n, replace=False)
     _si = _rng.choice(len(synth_imgs), size=_n, replace=False)
     _fig = make_subplots(
-        rows=2, cols=_n, row_titles=["real", "synthetic"],
+        rows=2, cols=_n,
         horizontal_spacing=0.02, vertical_spacing=0.06,
     )
     for _c in range(_n):
@@ -926,17 +1026,21 @@ def _(
     go,
     intensity_histogram,
     make_subplots,
+    noise_autocorrelation,
     radial_power_spectrum,
     real_imgs,
     synth_imgs,
     torch,
 ):
-    _rc, _re = intensity_histogram(torch.cat([_x.reshape(-1) for _x in real_imgs]), bins=64)
-    _sc, _se = intensity_histogram(torch.cat([_x.reshape(-1) for _x in synth_imgs]), bins=64)
+    _rc, _re = intensity_histogram(
+        torch.cat([_x.reshape(-1) for _x in real_imgs]), bins=64, value_range=(0.0, 1.0)
+    )
+    _sc, _se = intensity_histogram(
+        torch.cat([_x.reshape(-1) for _x in synth_imgs]), bins=64, value_range=(0.0, 1.0)
+    )
     _rd = (_rc / (_rc.sum() * (_re[1] - _re[0]))).numpy()
     _sd = (_sc / (_sc.sum() * (_se[1] - _se[0]))).numpy()
-    _rcent = ((_re[:-1] + _re[1:]) / 2).numpy()
-    _scent = ((_se[:-1] + _se[1:]) / 2).numpy()
+    _cent = ((_re[:-1] + _re[1:]) / 2).numpy()
 
 
     def _avg_ps(_imgs):
@@ -945,25 +1049,54 @@ def _(
         return _ps[0][0][:_L].numpy(), torch.stack([_p[1][:_L] for _p in _ps]).mean(0).numpy()
 
 
+    def _ac_slices(_imgs, _half=24):
+        _xs, _ys = [], []
+        for _im in _imgs:
+            _ac = noise_autocorrelation(_im)
+            _h, _w = _ac.shape
+            _cy, _cx = _h // 2, _w // 2
+            if _cy - _half < 0 or _cx - _half < 0 or _cy + _half + 1 > _h or _cx + _half + 1 > _w:
+                continue
+            _xs.append(_ac[_cy, _cx - _half:_cx + _half + 1])
+            _ys.append(_ac[_cy - _half:_cy + _half + 1, _cx])
+        _lag = torch.arange(-_half, _half + 1).numpy()
+        return _lag, torch.stack(_xs).mean(0).numpy(), torch.stack(_ys).mean(0).numpy()
+
+
     _frq, _Pr = _avg_ps(real_imgs)
     _frs, _Ps = _avg_ps(synth_imgs)
+    _lag, _rx, _ry = _ac_slices(real_imgs)
+    _lag2, _sx, _sy = _ac_slices(synth_imgs)
 
-    _fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.12,
-                         subplot_titles=["intensity histogram (density)",
-                                         "radial power spectrum (mean, log)"])
-    _fig.add_trace(go.Scatter(x=_rcent, y=_rd, mode="lines", name="real",
+    _fig = make_subplots(
+        rows=1, cols=3, horizontal_spacing=0.08,
+        subplot_titles=["intensity histogram (density, [0,1])",
+                        "radial power spectrum (mean, log)",
+                        "noise autocorrelation (x solid, y dotted)"],
+    )
+    _fig.add_trace(go.Scatter(x=_cent, y=_rd, mode="lines", name="real",
                               line=dict(color="#1f77b4", shape="hv")), row=1, col=1)
-    _fig.add_trace(go.Scatter(x=_scent, y=_sd, mode="lines", name="synthetic",
+    _fig.add_trace(go.Scatter(x=_cent, y=_sd, mode="lines", name="synthetic",
                               line=dict(color="#d62728", shape="hv")), row=1, col=1)
-    _fig.add_trace(go.Scatter(x=_frq[1:], y=_Pr[1:], mode="lines", name="real",
+    _fig.add_trace(go.Scatter(x=_frq[1:], y=_Pr[1:], mode="lines",
                               line=dict(color="#1f77b4"), showlegend=False), row=1, col=2)
-    _fig.add_trace(go.Scatter(x=_frs[1:], y=_Ps[1:], mode="lines", name="synthetic",
+    _fig.add_trace(go.Scatter(x=_frs[1:], y=_Ps[1:], mode="lines",
                               line=dict(color="#d62728"), showlegend=False), row=1, col=2)
+    _fig.add_trace(go.Scatter(x=_lag, y=_rx, mode="lines",
+                              line=dict(color="#1f77b4"), showlegend=False), row=1, col=3)
+    _fig.add_trace(go.Scatter(x=_lag, y=_ry, mode="lines",
+                              line=dict(color="#1f77b4", dash="dot"), showlegend=False), row=1, col=3)
+    _fig.add_trace(go.Scatter(x=_lag2, y=_sx, mode="lines",
+                              line=dict(color="#d62728"), showlegend=False), row=1, col=3)
+    _fig.add_trace(go.Scatter(x=_lag2, y=_sy, mode="lines",
+                              line=dict(color="#d62728", dash="dot"), showlegend=False), row=1, col=3)
     _fig.update_yaxes(type="log", row=1, col=2)
+    _fig.update_yaxes(range=[-0.05, 1.02], row=1, col=3)
     _fig.update_xaxes(title_text="normalized intensity", row=1, col=1)
     _fig.update_xaxes(title_text="cycles / image", row=1, col=2)
-    _fig.update_layout(height=340, width=880, margin=dict(l=8, r=8, t=40, b=8),
-                       legend=dict(x=0.46, y=0.98, xanchor="right", yanchor="top"))
+    _fig.update_xaxes(title_text="lag (px)", row=1, col=3)
+    _fig.update_layout(height=340, width=1000, margin=dict(l=8, r=8, t=40, b=8),
+                       legend=dict(x=0.30, y=0.98, xanchor="right", yanchor="top"))
     _fig
     return
 
