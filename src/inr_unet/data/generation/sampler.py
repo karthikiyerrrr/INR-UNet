@@ -154,6 +154,13 @@ class AugmentationSampler:
             )
         fov_A = candidates[int(rng.integers(len(candidates)))]
         output_size = max(1, int(fov_A / pixel_size_A))  # floor; >=1 guards sub-pixel FOVs
+        # Bound to realistic S/TEM image sizes; if the bound bites, back-solve pixel size so the
+        # FOV is preserved (a small FOV then implies finer sampling, as on a real microscope).
+        lo, hi = int(self.cfg.output_size_min), int(self.cfg.output_size_max)
+        bounded = min(max(output_size, lo), hi)
+        if bounded != output_size:
+            output_size = bounded
+            pixel_size_A = fov_A / output_size
         return fov_A, pixel_size_A, output_size
 
     def _draw_offset(

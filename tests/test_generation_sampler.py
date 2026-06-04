@@ -153,6 +153,33 @@ def test_draw_scale_respects_aliasing_and_fov():
         build_psf(cond, Grid(output_size, pixel_size_A))  # raises if k_cut >= k_Nyq
 
 
+def test_output_size_bounded_to_realistic_range():
+    # FOV and pixel size are drawn independently; bound the resulting image to realistic
+    # S/TEM sizes so a small FOV with coarse pixels can't imply a tiny (e.g. 31 px) image.
+    s = _sampler()
+    lo, hi = int(s.cfg.output_size_min), int(s.cfg.output_size_max)
+    for i in range(500):
+        _, p = s.sample(i, max_fov_A=80.0)
+        assert lo <= p.output_size <= hi
+        assert 0.05 <= p.pixel_size_A <= 0.30
+
+
+def test_draw_scale_back_solves_pixel_size_when_bound_bites():
+    # fov=8 with coarse pixels would floor to ~31 px; the floor must raise it to output_size_min
+    # and back-solve pixel size so output_size * pixel_size == fov exactly.
+    s = _sampler()
+    rng, _, _ = s._streams(0)
+    cond = IMAGING_CONDITIONS["cond1"]
+    saw_floor = False
+    for _ in range(200):
+        fov_A, pixel_size_A, output_size = s._draw_scale(rng, cond, 0.0, 80.0)
+        assert int(s.cfg.output_size_min) <= output_size <= int(s.cfg.output_size_max)
+        if output_size in (int(s.cfg.output_size_min), int(s.cfg.output_size_max)):
+            assert abs(output_size * pixel_size_A - fov_A) < 1e-6
+            saw_floor = True
+    assert saw_floor, "expected the output_size bound to bite for at least one draw"
+
+
 def test_draw_offset_within_slack():
     s = _sampler()
     rng, _, _ = s._streams(0)

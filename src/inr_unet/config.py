@@ -107,6 +107,12 @@ class SamplerConfig:
     # Lin2021 implicitly fixed pixel size at FOV / 256.
     pixel_size_A_min: float = 0.05
     pixel_size_A_max: float = 0.30
+    # FOV and pixel size are drawn independently, so a small FOV with coarse pixels can imply
+    # an unrealistically tiny image. Bound the resulting output_size to realistic S/TEM sizes
+    # (the reference dataset is 256 px); when the bound bites, pixel size is back-solved from
+    # output_size = FOV / pixel_size so the FOV/zoom is preserved.
+    output_size_min: int = 128
+    output_size_max: int = 512
     # geometry
     rotation_step_deg: float = 15.0
     rotation_max_deg: float = 90.0
