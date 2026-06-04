@@ -990,10 +990,18 @@ def _(mo):
     cal_zexp_min = mo.ui.slider(1.3, 1.9, value=1.5, step=0.05, label="z_exponent_min")
     cal_zexp_max = mo.ui.slider(1.6, 2.2, value=2.0, step=0.05, label="z_exponent_max")
     cal_z_eff = mo.ui.slider(1.3, 2.0, value=1.7, step=0.05, label="z_eff_exponent (projection)")
+    # scan-noise (sideways smear) knobs: amplitude lives on the imaging condition (default 0.2 A),
+    # frequency + vertical coupling are sampler ranges.
+    cal_sigma_jitter_A = mo.ui.slider(0.0, 1.0, value=0.10, step=0.05, label="sigma_jitter_A (smear amplitude)")
+    cal_scan_freq_min = mo.ui.slider(0.0, 0.5, value=0.02, step=0.02, label="scan_freq_min")
+    cal_scan_freq_max = mo.ui.slider(0.0, 0.5, value=0.5, step=0.02, label="scan_freq_max")
+    cal_scan_beta_max = mo.ui.slider(0.0, 1.0, value=0.5, step=0.05, label="scan_beta_max (vert coupling)")
 
     mo.vstack([
         mo.hstack([cal_master_seed, cal_n_synth], justify="start", gap=1),
         mo.hstack([cal_n_peak_min, cal_n_peak_max, cal_n_bg_frac_max, cal_bg_const_max, cal_bg_ramp_max],
+                  justify="start", gap=1),
+        mo.hstack([cal_sigma_jitter_A, cal_scan_freq_min, cal_scan_freq_max, cal_scan_beta_max],
                   justify="start", gap=1),
         mo.hstack([cal_perlin_amp_max, cal_perlin_cells_max, cal_perlin_w, cal_partial_fov_prob],
                   justify="start", gap=1),
@@ -1010,13 +1018,17 @@ def _(mo):
         cal_perlin_amp_max,
         cal_perlin_cells_max,
         cal_perlin_w,
+        cal_scan_beta_max,
+        cal_scan_freq_max,
+        cal_scan_freq_min,
+        cal_sigma_jitter_A,
         cal_z_eff,
         cal_zexp_max,
         cal_zexp_min,
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     AugmentationSampler,
     CIFProvider,
@@ -1036,6 +1048,10 @@ def _(
     cal_perlin_amp_max,
     cal_perlin_cells_max,
     cal_perlin_w,
+    cal_scan_beta_max,
+    cal_scan_freq_max,
+    cal_scan_freq_min,
+    cal_sigma_jitter_A,
     cal_z_eff,
     cal_zexp_max,
     cal_zexp_min,
@@ -1059,6 +1075,13 @@ def _(
     _s.bg_weights["perlin"] = float(cal_perlin_w.value)
     _s.z_exponent_min = float(cal_zexp_min.value)
     _s.z_exponent_max = float(cal_zexp_max.value)
+    # scan noise (sideways smear): frequency + vertical-coupling ranges on the sampler; amplitude
+    # (sigma_jitter_A) lives on the imaging condition, so it is overridden per render below.
+    _s.scan_freq_min, _s.scan_freq_max = sorted(
+        (float(cal_scan_freq_min.value), float(cal_scan_freq_max.value))
+    )
+    _s.scan_beta_max = float(cal_scan_beta_max.value)
+    _s.scan_beta_min = min(float(_s.scan_beta_min), _s.scan_beta_max)
     cal_cfg.data.cif.z_eff_exponent = float(cal_z_eff.value)
 
     cal_sampler = AugmentationSampler(_s, master_seed=int(cal_master_seed.value))
@@ -1096,6 +1119,7 @@ def _(
         _kind, _prov = cal_sources[_i % len(cal_sources)]
         _scene = _prov.get(_i)
         _cond, _p = cal_sampler.sample(_i, max_fov_A=float(_scene.fov_A))
+        _cond = replace(_cond, sigma_jitter_A=float(cal_sigma_jitter_A.value))  # smear amplitude
         _fov_render = float(_p.output_size * _p.pixel_size_A)  # sampler crop FOV (<= scene); training scale
         _p = replace(_p, output_size=256, pixel_size_A=_fov_render / 256)
         _out = cal_renderer.render(_scene, _cond, _p)
@@ -1122,6 +1146,9 @@ def _(
         f"{len(cal_sources)} scene kinds ({', '.join(k for k, _ in cal_sources)}). "
         f"Dose n_peak in [{_npeak.min():.0f}, {_npeak.max():.0f}] (lower = noisier); "
         f"crop FOV in [{min(m[4] for m in synth_meta):.0f}, {max(m[4] for m in synth_meta):.0f}] A; "
+        f"scan smear: sigma_jitter={float(cal_sigma_jitter_A.value):.2f} A, "
+        f"freq ~ U[{_s.scan_freq_min:.2f}, {_s.scan_freq_max:.2f}] cyc/row, "
+        f"beta ~ U[{_s.scan_beta_min:.2f}, {_s.scan_beta_max:.2f}]; "
         f"Z-exponent ~ U[{_s.z_exponent_min:.2f}, {_s.z_exponent_max:.2f}], "
         f"z_eff = {cal_cfg.data.cif.z_eff_exponent:.2f}."
     )
@@ -1136,10 +1163,11 @@ def _(mo):
     The TEM-ImageNet params fix only the **imaging condition** (200 kV, 24 mrad, 0.9 A =
     `cond1`); pixel size varies per image and the structure is not recorded. So here we
     **pin cond1** and let the training **augmentation sampler** randomize everything else --
-    rotation, defocus, astigmatism, background family, scan noise, dose, z-exponent, and
-    **FOV (the zoom)** -- to reproduce the varied character of real micrographs rather than a
-    sterile grid. Pick the crystal per row; the seed reshuffles both the reference selection
-    and the augmentation draws. Below the pairs: synthetic-only capabilities with no
+    crystal/zone, rotation, defocus, astigmatism, background family, scan noise, dose,
+    z-exponent, and **FOV (the zoom)** -- to reproduce the varied character of real micrographs
+    rather than a sterile grid. This mirrors the dataset we intend to generate: the crystal is
+    drawn at random per row, and the seed reshuffles the reference selection, the crystal, and
+    the augmentation draws. Below the pairs: synthetic-only capabilities with no
     reference-set counterpart.
     """)
     return
@@ -1175,7 +1203,7 @@ def _(
         _label = f"{pathlib.Path(_e.cif).stem} {_ZONE_NAMES.get(_za, str(_za))}"
         cmp_choices[_label] = (_e.cif, [int(_v) for _v in _e.zone_axis])
     cmp_labels = list(cmp_choices)
-    CMP_DEFAULT_STRUCTURE = "SrTiO3 [001]"
+    CMP_STRIP_PROB = 0.4  # P(row-strip | partial); the remaining partial scenes are compact blobs
 
 
     def cmp_full_scene(cif, zone_axis, fov_A):
@@ -1190,13 +1218,25 @@ def _(
 
 
     def cmp_partial_scene(cif, zone_axis, fov_A, rng):
-        # finite nx x ny supercell patch placed with margins inside a fov-sized scene
+        # A finite patch placed with margins inside a fov-sized scene: either a compact blob
+        # or an elongated row-strip (a thin supercell that reads as a tilted, isolated row once
+        # the sampler rotates it). Strip length is sized to the FOV so the row stays framed.
         _struct = Structure.from_file(cmp_cif_dir / cif)
-        _nx, _ny = int(rng.integers(1, 4)), int(rng.integers(1, 3))
+        _ze = float(_cmp_cfg.data.cif.z_eff_exponent)
+        _gt = float(_cmp_cfg.data.cif.group_tol_A)
+        if rng.random() < CMP_STRIP_PROB:
+            _long_axis = int(rng.random() < 0.5)  # which in-plane lattice axis runs long
+            _, _, _, _basis0 = project_structure(
+                _struct, zone_axis, fov_A=float(fov_A), n_exponent=_ze, group_tol_A=_gt,
+                supercell=(1, 1),
+            )
+            _spacing = float(torch.linalg.norm(_basis0[_long_axis]))
+            _ncell = max(3, round(float(rng.uniform(0.4, 0.65)) * float(fov_A) / max(_spacing, 1e-6)))
+            _sc = (_ncell, 1) if _long_axis == 0 else (1, _ncell)
+        else:
+            _sc = (int(rng.integers(1, 4)), int(rng.integers(1, 3)))  # compact blob
         _pos, _z, _count, _basis = project_structure(
-            _struct, zone_axis, fov_A=float(fov_A),
-            n_exponent=float(_cmp_cfg.data.cif.z_eff_exponent),
-            group_tol_A=float(_cmp_cfg.data.cif.group_tol_A), supercell=(_nx, _ny),
+            _struct, zone_axis, fov_A=float(fov_A), n_exponent=_ze, group_tol_A=_gt, supercell=_sc,
         )
         if _pos.shape[0] > 0:
             _span = _pos.max(dim=0).values - _pos.min(dim=0).values
@@ -1227,8 +1267,8 @@ def _(
         )
         return _renderer.render(_scene, _cond, _params).image
 
+
     return (
-        CMP_DEFAULT_STRUCTURE,
         cmp_choices,
         cmp_full_scene,
         cmp_labels,
@@ -1249,18 +1289,6 @@ def _(mo, real_imgs):
 
 
 @app.cell(hide_code=True)
-def _(CMP_DEFAULT_STRUCTURE, cmp_labels, cmp_n, mo):
-    cmp_structures = mo.ui.array(
-        [
-            mo.ui.dropdown(cmp_labels, value=CMP_DEFAULT_STRUCTURE, label=f"row {_i + 1}")
-            for _i in range(cmp_n.value)
-        ]
-    )
-    mo.vstack([mo.md("**Structure per comparison row**"), cmp_structures])
-    return (cmp_structures,)
-
-
-@app.cell(hide_code=True)
 def _(
     AugmentationSampler,
     ExperimentConfig,
@@ -1268,12 +1296,12 @@ def _(
     OmegaConf,
     cmp_choices,
     cmp_full_scene,
+    cmp_labels,
     cmp_n,
     cmp_partial_prob,
     cmp_partial_scene,
     cmp_renderer,
     cmp_seed,
-    cmp_structures,
     go,
     make_subplots,
     np,
@@ -1283,8 +1311,8 @@ def _(
     torch,
 ):
     # Pin cond1 (the only thing params.txt fixes); randomize the rest via the augmentation
-    # sampler (rotation, defocus, astig, background, scan noise, dose, z-exponent, FOV=zoom).
-    # Some rows render a finite particle in vacuum (partial FOV) instead of a full lattice.
+    # sampler (rotation, defocus, astig, background, scan noise, dose, z-exponent, FOV=zoom) plus
+    # the crystal/zone per row. Some rows render a finite particle in vacuum (partial FOV).
     _acfg = OmegaConf.merge(OmegaConf.structured(ExperimentConfig), OmegaConf.load("configs/default.yaml"))
     _sampler = AugmentationSampler(_acfg.generation.sampler, master_seed=int(cmp_seed.value))
     _n = min(cmp_n.value, len(real_imgs))
@@ -1293,7 +1321,8 @@ def _(
     _pairs = []
     for _r, _idx in enumerate(_sel):
         _idx = int(_idx)
-        _label = cmp_structures.value[_r]
+        _srng = np.random.default_rng(np.random.SeedSequence([int(cmp_seed.value), _idx, 555]))
+        _label = cmp_labels[int(_srng.integers(len(cmp_labels)))]  # crystal drawn at random per row
         _cif, _zone = cmp_choices[_label]
         _cond, _p = _sampler.sample(_idx, max_fov_A=80.0)
         _fov = _p.output_size * _p.pixel_size_A
@@ -1330,6 +1359,7 @@ def _(
     _fig.update_layout(height=240 * _n, width=560, margin=dict(l=8, r=120, t=24, b=8),
                        title_text="Reference vs augmented synthetic (cond1 pinned, rest randomized)")
     _fig
+
     return
 
 
