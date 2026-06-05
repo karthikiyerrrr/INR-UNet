@@ -17,12 +17,14 @@ from inr_unet.data.providers import CIFProvider, SyntheticLatticeProvider
 if TYPE_CHECKING:
     from omegaconf import DictConfig
 
-    from inr_unet.data.generation.structures import RenderOutput
+    from inr_unet.data.generation.structures import ColumnList, RenderOutput, RenderParams
 
 # Decorrelated RNG stream (length-3 SeedSequence root; see plan determinism note).
 _CROP_SALT = 2017
 # Keep columns within this Angstrom margin of the valid window (covers peak/disk support).
 _LABEL_MARGIN_A = 6.0
+# Decorrelated RNG stream for the frame-vs-background (vacuum-aim) decision on partial scenes.
+_EMPTY_SALT = 6029
 
 
 @dataclass(frozen=True)
@@ -87,10 +89,32 @@ class SyntheticRenderSource:
         scene = self.provider.get(idx // self.draws_per_scene)
         condition, params = self.sampler.sample(idx, max_fov_A=scene.fov_A)
         if scene.is_partial and scene.positions_A.shape[0] > 0:
-            # center the render window on the patch; the sampler's jitter would un-frame it.
-            params = replace(params, position_offset_A=torch.zeros(2))
+            params = replace(params, position_offset_A=self._partial_offset(scene, params, idx))
         out = self.renderer.render(scene, condition, params)
         return self._crop(out, idx)
+
+    def _partial_offset(
+        self, scene: ColumnList, params: RenderParams, idx: int
+    ) -> torch.Tensor:
+        """Render offset for a partial scene: 0 frames the patch; an ``empty_crop_fraction``
+        fraction of draws instead aim the window into vacuum (clear of the patch + label margin
+        along a random axis) so the tile is pure background."""
+        rng = np.random.default_rng(
+            np.random.SeedSequence([self.master_seed, int(idx), _EMPTY_SALT])
+        )
+        if rng.random() >= self.empty_crop_fraction:
+            return torch.zeros(2)  # frame the patch
+        struct_center = scene.fov_A / 2.0
+        radius = float((scene.positions_A - struct_center).norm(dim=1).max())
+        fov_render = params.output_size * params.pixel_size_A
+        # push the window fully past the patch: min in-window column coord then exceeds the
+        # keep band [-margin, fov_render + margin], so every patch column is dropped.
+        mag = fov_render / 2.0 + radius + _LABEL_MARGIN_A + 1.0
+        axis = int(rng.integers(2))
+        sign = 1.0 if rng.random() < 0.5 else -1.0
+        offset = torch.zeros(2)
+        offset[axis] = sign * mag
+        return offset
 
     def _crop(self, out: RenderOutput, idx: int) -> RenderedSample:
         rng = np.random.default_rng(

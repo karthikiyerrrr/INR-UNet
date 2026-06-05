@@ -152,6 +152,7 @@ def test_partial_scene_zeros_render_offset():
     cfg.data.cif.partial_fov_prob = 1.0
     cfg.data.synthetic.n_scenes = 2
     cfg.data.synthetic.draws_per_scene = 2
+    cfg.data.synthetic.empty_crop_fraction = 0.0  # force frame draws so the offset is zeroed
     src = SyntheticRenderSource(cfg)
 
     captured = {"offset": None}
@@ -206,3 +207,50 @@ def test_partial_scenes_are_framed_not_empty():
     src = SyntheticRenderSource(cfg)
     nonempty = sum(int(src.get(i).positions_A.shape[0] > 0) for i in range(len(src)))
     assert nonempty / len(src) >= 0.7  # floor leaves headroom for empty_crop_fraction misses
+
+
+def test_empty_crop_fraction_controls_partial_empties():
+    """empty_crop_fraction reliably produces vacuum (background) tiles from partial scenes by
+    aiming the render into vacuum; 0.0 yields none (patches stay framed)."""
+    def empty_rate(ecf):
+        cfg = OmegaConf.structured(ExperimentConfig)
+        cfg.data.provider = "cif"
+        cfg.data.occupancy.mode = "full"
+        cfg.data.cif.partial_fov_prob = 1.0
+        cfg.data.synthetic.empty_crop_fraction = ecf
+        cfg.data.synthetic.n_scenes = 4
+        cfg.data.synthetic.draws_per_scene = 6
+        src = SyntheticRenderSource(cfg)
+        empt = sum(int(src.get(i).positions_A.shape[0] == 0) for i in range(len(src)))
+        return empt / len(src)
+
+    assert empty_rate(0.0) == 0.0    # no background draws -> centered patches always framed
+    assert empty_rate(0.5) >= 0.25   # background draws reliably materialize as vacuum tiles
+
+
+def test_partial_background_draw_aims_render_into_vacuum():
+    """With empty_crop_fraction=1.0 every partial draw is a background draw: the render offset is
+    pushed off the patch and the resulting tile is empty (all-zero label)."""
+    cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.provider = "cif"
+    cfg.data.occupancy.mode = "full"
+    cfg.data.cif.partial_fov_prob = 1.0
+    cfg.data.synthetic.empty_crop_fraction = 1.0
+    cfg.data.synthetic.n_scenes = 2
+    cfg.data.synthetic.draws_per_scene = 2
+    src = SyntheticRenderSource(cfg)
+
+    captured = {"offset": None}
+    real_render = src.renderer.render
+
+    def spy(scene, condition, params):
+        captured["offset"] = params.position_offset_A.clone()
+        return real_render(scene, condition, params)
+
+    src.renderer.render = spy
+    sample = src.get(0)
+    assert captured["offset"] is not None
+    assert float(captured["offset"].abs().max()) > 0.0  # aimed off the patch
+    assert sample.positions_A.shape[0] == 0              # tile is pure background
+    assert torch.isfinite(sample.image).all()
+    assert float(sample.image.min()) >= 0.0 and float(sample.image.max()) <= 1.0
