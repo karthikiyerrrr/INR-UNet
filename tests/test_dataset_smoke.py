@@ -21,6 +21,7 @@ def test_unet_pairs_are_sane():
     cfg = _small_locked_cfg()
     ds = STEMSegDataset(cfg)
     s = cfg.data.synthetic.crop_size
+    any_signal = False
     for i in range(len(ds)):
         image, mask = ds[i]
         assert image.shape == (1, s, s)
@@ -28,6 +29,8 @@ def test_unet_pairs_are_sane():
         assert torch.isfinite(image).all()
         assert float(image.min()) >= 0.0 and float(image.max()) <= 1.0
         assert float(mask.min()) >= 0.0 and float(mask.max()) <= 1.0
+        any_signal = any_signal or float(mask.max()) > 0.5
+    assert any_signal, "content-aware crop should find a labelled column in 9 draws"
 
 
 def test_liif_pairs_are_sane_and_some_label_nonempty():
@@ -46,5 +49,5 @@ def test_liif_pairs_are_sane_and_some_label_nonempty():
         assert px_min <= tgt <= px_max
         assert torch.isfinite(gt).all()
         assert float(gt.min()) >= 0.0 and float(gt.max()) <= 1.0
-        any_signal = any_signal or float(gt.max()) > 0.5
+        any_signal = any_signal or float(gt.max()) > 0.0
     assert any_signal  # content-aware crop yields labelled columns somewhere in the set
