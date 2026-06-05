@@ -82,20 +82,23 @@ def test_small_render_uses_whole_field():
 
 def test_crop_offset_shifts_positions():
     """Positions become tile-local: shifted by the chosen pixel offset times px."""
-    src = SyntheticRenderSource(_cfg(crop_size=32, tile_min=6.0, tile_max=6.0))
+    cfg = _cfg(crop_size=32, tile_min=6.0, tile_max=6.0)
+    cfg.data.synthetic.min_columns_in_crop = 0  # loop breaks on first draw -> single offset pair
+    src = SyntheticRenderSource(cfg)
     px = 0.1
     out = _fake_out(h=128, px=px, positions=[[3.0, 3.0]])
     s = src._crop(out, idx=5)
-    w = round(6.0 / px)  # 60 px window
-    # reproduce the deterministic offset draw stream for (seed=0, idx=5)
+    w = round(6.0 / px)
     rng = np.random.default_rng(np.random.SeedSequence([0, 5, 2017]))
-    _ = float(rng.uniform(6.0, 6.0))      # tile_fov_A draw
-    allow_empty = rng.random() < src.empty_crop_fraction
+    _ = float(rng.uniform(6.0, 6.0))               # tile_fov_A draw
+    _ = rng.random() < src.empty_crop_fraction     # allow_empty draw
     oy = int(rng.integers(0, 128 - w + 1))
     ox = int(rng.integers(0, 128 - w + 1))
-    if s.positions_A.shape[0] == 1 and allow_empty:
-        expected = torch.tensor([[3.0 - ox * px, 3.0 - oy * px]])
-        assert torch.allclose(s.positions_A, expected, atol=1e-4)
+    expected_x, expected_y = 3.0 - ox * px, 3.0 - oy * px
+    assert s.positions_A.shape[0] == 1, "column must survive keep-filter"
+    assert torch.allclose(
+        s.positions_A, torch.tensor([[expected_x, expected_y]]), atol=1e-4
+    )
 
 
 def test_returns_rendered_sample_type():

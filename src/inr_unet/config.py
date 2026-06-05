@@ -39,7 +39,7 @@ class ModelConfig:
 class SyntheticDatasetConfig:
     n_scenes: int = 64
     draws_per_scene: int = 16
-    crop_size: int = 48              # S - encoder input; renders < S are reflect-padded
+    crop_size: int = 48              # S - encoder input; each tile is a physical window resampled to S px
     sample_q: int = 2304             # Q = 48**2 query points
     label_kind: str = "gaussian"     # LABEL_FIELDS key
     target_pixel_size_A_min: float = 0.05
