@@ -1,4 +1,4 @@
-"""Known-value tests for DiceLoss and dice_bce_loss."""
+"""Known-value tests for loss functions: DiceLoss, dice_bce_loss, weighted_mse_loss, make_loss."""
 
 import pytest
 import torch
@@ -51,7 +51,8 @@ def test_weighted_mse_zero_on_perfect_prediction():
 def test_weighted_mse_penalizes_foreground_more_than_background():
     target = torch.zeros(1, 1, 4, 4)
     target[0, 0, 0, 0] = 1.0  # single foreground peak
-    # logits that are correct everywhere; then perturb one pixel by the same amount
+    # both wrong pixels are set to logit=0 (sigmoid=0.5), giving equal prob-space errors;
+    # only the weight differs
     base = torch.log(target.clamp(1e-4, 1 - 1e-4) / (1 - target.clamp(1e-4, 1 - 1e-4)))
     fg_wrong = base.clone()
     fg_wrong[0, 0, 0, 0] = 0.0  # sigmoid 0.5 vs target 1.0
