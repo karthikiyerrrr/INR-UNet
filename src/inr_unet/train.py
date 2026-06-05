@@ -115,6 +115,8 @@ def save_checkpoint(
         "best_val_f1": best_val_f1,
         "best_epoch": best_epoch,
         "history": history,
+        # CPU torch RNG only; the model has no CUDA-only stochastic ops (no dropout), so CUDA
+        # RNG need not be saved for bit-exact resume.
         "torch_rng": torch.get_rng_state(),
         "numpy_rng": np.random.get_state(),
     }
@@ -307,7 +309,12 @@ def _make_panels(model, dataset, indices: list[int], device: str, k: int
 def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
     """Train INRUNet on the LIIF query path with per-epoch dense val eval, val-F1 selection,
     early stopping, and resumable checkpoints. ``run_dir/checkpoints/{last,best}.pt`` are written
-    every epoch (put run_dir on persistent storage so a dropped session can resume_from last.pt)."""
+    every epoch (put run_dir on persistent storage so a dropped session can resume_from last.pt).
+
+    An ``EpochRecord`` (and progress line) is emitted only on eval epochs, so with
+    ``eval_every > 1`` the history is sparse (one row per eval, not per epoch); ``last.pt`` is
+    still written every epoch for resume.
+    """
     run_dir = Path(run_dir)
     ckpt_dir = run_dir / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -363,6 +370,11 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
                 val_mean_offset_A=m.mean_offset_A, val_median_offset_A=m.median_offset_A,
                 lr=optimizer.param_groups[0]["lr"],
             ))
+            print(
+                f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  "
+                f"val_loss={m.loss:.4f}  val_f1={m.f1:.4f}  best_f1={best_val_f1:.4f}",
+                flush=True,
+            )
         history_dicts = [asdict(r) for r in history]
         save_checkpoint(
             ckpt_dir / "last.pt", epoch=epoch, model=model, optimizer=optimizer,
