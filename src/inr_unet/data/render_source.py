@@ -27,20 +27,11 @@ _LABEL_MARGIN_A = 6.0
 
 @dataclass(frozen=True)
 class RenderedSample:
-    image: torch.Tensor          # [S, S] in [0, 1], reflect-padded if the render was < S
+    image: torch.Tensor          # [S, S] in [0, 1], a physical-extent tile resampled to crop_size
     positions_A: torch.Tensor    # [M, 2] column centers, crop-local Angstroms
     radii_A: torch.Tensor        # [M]
     input_pixel_size_A: float    # the render's pixel size (physical resolution of the input)
     valid_extent_A: float        # physical size of the valid (non-padded) region, in Angstroms
-
-
-def _reflect_pad_to(img: torch.Tensor, size: int) -> torch.Tensor:
-    """Pad a square [H, W] image to [size, size] with the render kept at the top-left."""
-    h, w = img.shape
-    py, px = size - h, size - w
-    mode = "reflect" if (py < h and px < w) else "replicate"
-    out = F.pad(img[None, None], (0, px, 0, py), mode=mode)
-    return out[0, 0]
 
 
 class SyntheticRenderSource:
@@ -54,7 +45,8 @@ class SyntheticRenderSource:
         self.min_columns_in_crop = int(syn.min_columns_in_crop)
         self.empty_crop_fraction = float(syn.empty_crop_fraction)
         self.crop_redraw_cap = int(syn.crop_redraw_cap)
-        self.redraw_enabled = str(cfg.data.occupancy.mode) != "full"
+        self.tile_fov_A_min = float(syn.tile_fov_A_min)
+        self.tile_fov_A_max = float(syn.tile_fov_A_max)
         self.provider = self._build_provider(cfg)
         self.sampler = AugmentationSampler(cfg.generation.sampler, self.master_seed)
         self.renderer = TEMRenderer(cfg.generation)
@@ -81,7 +73,7 @@ class SyntheticRenderSource:
             )
         else:
             inner = SyntheticLatticeProvider(syn, self.master_seed)
-        if self.redraw_enabled:  # occupancy.mode != "full"
+        if str(cfg.data.occupancy.mode) != "full":
             return FiniteSupportProvider(inner, cfg.data.occupancy, self.master_seed)
         return inner
 
@@ -102,47 +94,46 @@ class SyntheticRenderSource:
         )
         h = out.meta.output_size
         px = out.meta.pixel_size_A
-        s = self.crop_size
         positions = out.positions_A
         radii = out.radii_A
-        if h >= s:
-            oy, ox = self._choose_offset(positions, h, s, px, rng)
-            image = out.image[oy:oy + s, ox:ox + s]
-            valid_extent_A = s * px
-            positions = positions - torch.tensor([ox * px, oy * px], dtype=positions.dtype)
-        else:
-            image = _reflect_pad_to(out.image, s)
-            valid_extent_A = h * px
+        render_extent_A = h * px
+        # Bounded physical tile window, clamped to the render extent (small renders use the whole
+        # field). Round to whole pixels, then recompute the extent so reported fields are exact.
+        tile_fov_A = float(rng.uniform(self.tile_fov_A_min, self.tile_fov_A_max))
+        tile_fov_A = min(tile_fov_A, render_extent_A)
+        w = max(1, min(int(round(tile_fov_A / px)), h))
+        tile_fov_A = w * px
+        oy, ox = self._choose_offset(positions, h, w, px, rng)
+        window = out.image[oy:oy + w, ox:ox + w]
+        image = F.interpolate(
+            window[None, None], size=(self.crop_size, self.crop_size),
+            mode="bilinear", align_corners=False, antialias=True,
+        )[0, 0]
+        positions = positions - torch.tensor([ox * px, oy * px], dtype=positions.dtype)
         keep = (
-            (positions >= -_LABEL_MARGIN_A) & (positions <= valid_extent_A + _LABEL_MARGIN_A)
+            (positions >= -_LABEL_MARGIN_A) & (positions <= tile_fov_A + _LABEL_MARGIN_A)
         ).all(dim=1)
         return RenderedSample(
             image=image.contiguous(),
             positions_A=positions[keep],
             radii_A=radii[keep],
-            input_pixel_size_A=float(px),
-            valid_extent_A=float(valid_extent_A),
+            input_pixel_size_A=float(tile_fov_A / self.crop_size),
+            valid_extent_A=float(tile_fov_A),
         )
 
     def _choose_offset(
-        self, positions: torch.Tensor, h: int, s: int, px: float, rng: np.random.Generator
+        self, positions: torch.Tensor, h: int, w: int, px: float, rng: np.random.Generator
     ) -> tuple[int, int]:
-        """Pick a crop offset. Legacy single draw unless redraw is enabled for finite particles."""
-        if not self.redraw_enabled:
-            oy = int(rng.integers(0, h - s + 1))
-            ox = int(rng.integers(0, h - s + 1))
-            return oy, ox
+        """Seek a window offset holding >= min_columns_in_crop columns (unless an empty tile is drawn)."""
         allow_empty = rng.random() < self.empty_crop_fraction
         oy = ox = 0
         for _ in range(self.crop_redraw_cap):
-            oy = int(rng.integers(0, h - s + 1))
-            ox = int(rng.integers(0, h - s + 1))
+            oy = int(rng.integers(0, h - w + 1))
+            ox = int(rng.integers(0, h - w + 1))
             if allow_empty:
                 break
             shifted = positions - torch.tensor([ox * px, oy * px], dtype=positions.dtype)
-            in_crop = (
-                ((shifted >= 0.0) & (shifted <= s * px)).all(dim=1).sum().item()
-            )
+            in_crop = ((shifted >= 0.0) & (shifted <= w * px)).all(dim=1).sum().item()
             if in_crop >= self.min_columns_in_crop:
                 break
         return oy, ox
