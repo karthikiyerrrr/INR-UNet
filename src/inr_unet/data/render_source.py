@@ -125,7 +125,7 @@ class SyntheticRenderSource:
     def _choose_offset(
         self, positions: torch.Tensor, h: int, w: int, px: float, rng: np.random.Generator
     ) -> tuple[int, int]:
-        """Seek a window offset holding >= min_columns_in_crop columns (unless an empty tile is drawn)."""
+        """Seek an offset holding >= min_columns_in_crop columns (unless an empty tile is drawn)."""
         allow_empty = rng.random() < self.empty_crop_fraction
         oy = ox = 0
         for _ in range(self.crop_redraw_cap):

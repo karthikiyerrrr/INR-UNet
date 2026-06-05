@@ -67,7 +67,7 @@ def test_tile_extent_within_bounds_for_large_render():
     out = _fake_out(h=256, px=0.25, positions=[[10.0, 10.0]])
     s = src._crop(out, idx=0)
     assert s.image.shape == (64, 64)
-    assert 12.0 - 1e-6 <= s.valid_extent_A <= 20.0 + 0.25  # within [min, max] (+ one-pixel rounding)
+    assert 12.0 - 1e-6 <= s.valid_extent_A <= 20.0 + 0.25  # within [min, max] (+ 1px rounding)
     assert s.input_pixel_size_A == pytest.approx(s.valid_extent_A / 64)
 
 

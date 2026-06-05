@@ -39,12 +39,13 @@ class ModelConfig:
 class SyntheticDatasetConfig:
     n_scenes: int = 64
     draws_per_scene: int = 16
-    crop_size: int = 48              # S - encoder input; each tile is a physical window resampled to S px
-    sample_q: int = 2304             # Q = 48**2 query points
+    # S - encoder input; each tile is a physical window resampled to S px
+    crop_size: int = 48
+    sample_q: int = 2304             # Q query points (independent of crop_size)
     label_kind: str = "gaussian"     # LABEL_FIELDS key
     target_pixel_size_A_min: float = 0.05
     target_pixel_size_A_max: float = 0.30
-    # physical-extent tile: each crop spans a bounded Angstrom window, then resamples to crop_size px
+    # physical-extent tile: each crop spans a bounded Angstrom window, resampled to crop_size px
     tile_fov_A_min: float = 12.0
     tile_fov_A_max: float = 32.0
     master_seed: int = 0
