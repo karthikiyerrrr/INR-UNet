@@ -49,6 +49,7 @@ class ColumnList:
     count: torch.Tensor        # [N]
     fov_A: float
     lattice_basis_A: torch.Tensor | None = None  # [2, 2] rows = in-plane lattice vectors (A)
+    is_partial: bool = False  # True for a finite patch placed in vacuum (vs a space-filling scene)
 
     def validate(self, grid: Grid) -> None:
         n = self.positions_A.shape[0]

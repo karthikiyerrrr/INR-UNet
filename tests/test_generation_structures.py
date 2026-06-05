@@ -133,6 +133,23 @@ def test_imaging_condition_astig_defaults_zero():
         assert c.astig_a1_azimuth_rad == 0.0
 
 
+def test_columnlist_is_partial_defaults_false_and_settable():
+    import torch
+
+    from inr_unet.data.generation.structures import ColumnList
+
+    base = ColumnList(
+        positions_A=torch.zeros(1, 2), z=torch.ones(1), count=torch.ones(1), fov_A=10.0
+    )
+    assert base.is_partial is False
+
+    flagged = ColumnList(
+        positions_A=torch.zeros(1, 2), z=torch.ones(1), count=torch.ones(1),
+        fov_A=10.0, is_partial=True,
+    )
+    assert flagged.is_partial is True
+
+
 def test_renderer_is_implemented():
     from omegaconf import OmegaConf
 
