@@ -89,7 +89,7 @@ generation:
     bg_nonlinear_blobs_min: 2
     bg_nonlinear_blobs_max: 5
     bg_perlin_amp_min: 0.05
-    bg_perlin_amp_max: 0.35
+    bg_perlin_amp_max: 0.45
     bg_perlin_cells_min: 2
     bg_perlin_cells_max: 6
     n_peak_min: 8.0
