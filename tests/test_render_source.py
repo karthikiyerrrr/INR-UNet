@@ -141,3 +141,68 @@ def test_synthetic_full_provider_unwrapped():
 
     cfg = OmegaConf.structured(ExperimentConfig)
     assert isinstance(SyntheticRenderSource(cfg).provider, SyntheticLatticeProvider)
+
+
+def test_partial_scene_zeros_render_offset():
+    """For a partial scene, the offset reaching the renderer is forced to zero (centers the
+    window on the patch), regardless of the jitter the sampler drew."""
+    cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.provider = "cif"
+    cfg.data.occupancy.mode = "full"
+    cfg.data.cif.partial_fov_prob = 1.0
+    cfg.data.synthetic.n_scenes = 2
+    cfg.data.synthetic.draws_per_scene = 2
+    src = SyntheticRenderSource(cfg)
+
+    captured = {"offset": None}
+    real_render = src.renderer.render
+
+    def spy(scene, condition, params):
+        captured["offset"] = params.position_offset_A.clone()
+        return real_render(scene, condition, params)
+
+    src.renderer.render = spy
+    sample = src.get(0)
+    assert sample.positions_A.shape[0] > 0  # partial patch is framed (precondition)
+    assert captured["offset"] is not None, "renderer was never called with a partial scene"
+    assert torch.equal(captured["offset"], torch.zeros(2))
+
+
+def test_full_scene_keeps_sampler_offset():
+    """A full (non-partial) scene must NOT have its offset zeroed; the guard leaves it alone."""
+    cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.provider = "cif"
+    cfg.data.occupancy.mode = "full"
+    cfg.data.cif.partial_fov_prob = 0.0  # all full scenes
+    cfg.data.synthetic.n_scenes = 2
+    cfg.data.synthetic.draws_per_scene = 2
+    src = SyntheticRenderSource(cfg)
+
+    captured = {"offset": None}
+    real_render = src.renderer.render
+
+    def spy(scene, condition, params):
+        assert scene.is_partial is False  # precondition: this scene is full
+        captured["offset"] = params.position_offset_A.clone()
+        return real_render(scene, condition, params)
+
+    src.renderer.render = spy
+    src.get(0)
+    # the offset reaching the renderer is whatever the sampler drew (the guard did not touch it)
+    _, expected = src.sampler.sample(0, max_fov_A=src.provider.get(0).fov_A)
+    assert captured["offset"] is not None
+    assert torch.equal(captured["offset"], expected.position_offset_A)
+
+
+def test_partial_scenes_are_framed_not_empty():
+    """Partial-FOV tiles hold columns at >= 70%; the centered-patch + zeroed-offset fix
+    maintains this floor end-to-end (provider -> sampler -> render -> crop)."""
+    cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.provider = "cif"
+    cfg.data.occupancy.mode = "full"
+    cfg.data.cif.partial_fov_prob = 1.0
+    cfg.data.synthetic.n_scenes = 3
+    cfg.data.synthetic.draws_per_scene = 6
+    src = SyntheticRenderSource(cfg)
+    nonempty = sum(int(src.get(i).positions_A.shape[0] > 0) for i in range(len(src)))
+    assert nonempty / len(src) >= 0.7  # floor leaves headroom for empty_crop_fraction misses

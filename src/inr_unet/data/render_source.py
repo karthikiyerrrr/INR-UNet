@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -86,6 +86,9 @@ class SyntheticRenderSource:
             raise IndexError(f"idx {idx} out of range [0, {len(self)})")
         scene = self.provider.get(idx // self.draws_per_scene)
         condition, params = self.sampler.sample(idx, max_fov_A=scene.fov_A)
+        if scene.is_partial and scene.positions_A.shape[0] > 0:
+            # center the render window on the patch; the sampler's jitter would un-frame it.
+            params = replace(params, position_offset_A=torch.zeros(2))
         out = self.renderer.render(scene, condition, params)
         return self._crop(out, idx)
 
