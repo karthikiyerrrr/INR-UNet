@@ -1339,9 +1339,15 @@ def _(
         _pairs.append((real_imgs[_idx], _synth))
         _titles.append(f"#{real_indices[_idx]} . {_label} . {_fov:.0f}A . {'partial' if _is_partial else 'full'}")
 
+    # Square subplot cells in pixels: every image is 1:1 (refs 256x256, synth square), so square cells
+    # leave no slack for constrain="domain" to letterbox -> images fill, stable across cmp_n.
+    _CELL, _GAP_V, _GAP_H = 220, 18, 8
+    _TTOP, _MB, _ML, _MR = 24, 8, 8, 120
+    _Hp = _n * _CELL + (_n - 1) * _GAP_V
+    _Wp = 2 * _CELL + _GAP_H
     _fig = make_subplots(
         rows=_n, cols=2, column_titles=["reference", "synthetic"],
-        row_titles=_titles, horizontal_spacing=0.02, vertical_spacing=0.04,
+        row_titles=_titles, horizontal_spacing=_GAP_H / _Wp, vertical_spacing=_GAP_V / _Hp,
     )
     for _i, (_real, _synth) in enumerate(_pairs):
         _fig.add_trace(go.Heatmap(z=_real.numpy(), colorscale="gray", showscale=False),
@@ -1356,7 +1362,8 @@ def _(
                                 showticklabels=False, ticks="")
         _fig.layout[_xk].update(constrain="domain", showticklabels=False, ticks="")
     _fig.update_annotations(font_size=11)
-    _fig.update_layout(height=240 * _n, width=560, margin=dict(l=8, r=120, t=24, b=8),
+    _fig.update_layout(height=_Hp + _TTOP + _MB, width=_Wp + _ML + _MR,
+                       margin=dict(l=_ML, r=_MR, t=_TTOP, b=_MB),
                        title_text="Reference vs augmented synthetic (cond1 pinned, rest randomized)")
     _fig
 
