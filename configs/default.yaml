@@ -27,6 +27,8 @@ data:
     crop_size: 128
     sample_q: 2304
     label_kind: gaussian
+    gaussian_fwhm_A: 0.2
+    gaussian_sigma_floor_px: 1.0
     target_pixel_size_A_min: 0.05
     target_pixel_size_A_max: 0.30
     master_seed: 0
@@ -64,6 +66,8 @@ train:
   epochs: 100
   lr: 1.0e-4
   seed: 0
+  loss: weighted_mse
+  fg_weight: 10.0
 generation:
   potential_backend: z_power
   sigma_potential_A: 0.4

@@ -43,6 +43,8 @@ class SyntheticDatasetConfig:
     crop_size: int = 48
     sample_q: int = 2304             # Q query points (independent of crop_size)
     label_kind: str = "gaussian"     # LABEL_FIELDS key
+    gaussian_fwhm_A: float = 0.2
+    gaussian_sigma_floor_px: float = 1.0
     target_pixel_size_A_min: float = 0.05
     target_pixel_size_A_max: float = 0.30
     # physical-extent tile: each crop spans a bounded Angstrom window, resampled to crop_size px
@@ -102,6 +104,8 @@ class TrainConfig:
     epochs: int = 100
     lr: float = 1e-4
     seed: int = 0
+    loss: str = "weighted_mse"   # {"weighted_mse", "dice_bce"}
+    fg_weight: float = 10.0      # foreground weight lambda in weighted_mse_loss
 
 
 @dataclass

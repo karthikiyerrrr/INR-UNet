@@ -9,6 +9,7 @@ import torch
 from torch.utils.data import Dataset
 
 import inr_unet.data.generation.labels  # noqa: F401  (registers LABEL_FIELDS entries)
+from inr_unet.data.generation.labels import GaussianField
 from inr_unet.data.generation.structures import Grid
 from inr_unet.data.render_source import SyntheticRenderSource
 from inr_unet.registry import LABEL_FIELDS
@@ -20,12 +21,22 @@ if TYPE_CHECKING:
 _QUERY_SALT = 3023
 
 
+def _build_label_field(syn: DictConfig):
+    """Construct the configured label field, passing the sigma policy to the Gaussian field."""
+    if syn.label_kind == "gaussian":
+        return GaussianField(
+            fwhm_A=float(syn.gaussian_fwhm_A),
+            sigma_floor_px=float(syn.gaussian_sigma_floor_px),
+        )
+    return LABEL_FIELDS.get(syn.label_kind)()
+
+
 class STEMSegDataset(Dataset):
     """Yields fixed-grid ``(image, mask)`` pairs for the baseline UNet."""
 
     def __init__(self, cfg: DictConfig) -> None:
         self.source = SyntheticRenderSource(cfg)
-        self.label_field = LABEL_FIELDS.get(cfg.data.synthetic.label_kind)()
+        self.label_field = _build_label_field(cfg.data.synthetic)
 
     def __len__(self) -> int:
         return len(self.source)
@@ -49,7 +60,7 @@ class LIIFSegDataset(Dataset):
     def __init__(self, cfg: DictConfig) -> None:
         syn = cfg.data.synthetic
         self.source = SyntheticRenderSource(cfg)
-        self.label_field = LABEL_FIELDS.get(syn.label_kind)()
+        self.label_field = _build_label_field(syn)
         self.sample_q = int(syn.sample_q)
         self.tgt_px_min = float(syn.target_pixel_size_A_min)
         self.tgt_px_max = float(syn.target_pixel_size_A_max)
