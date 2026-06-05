@@ -53,7 +53,6 @@ def test_build_model_returns_inr_unet():
     assert isinstance(model, INRUNet)
 
 
-@pytest.mark.xfail(reason="forward pass not implemented during setup phase", strict=True)
 def test_inr_unet_forward_shape():
     """INRUNet maps an image + query coordinates to per-coordinate logits."""
     cfg = load_config(CONFIG_PATH)
