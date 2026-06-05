@@ -134,4 +134,5 @@ class FiniteSupportProvider:
             count=cols.count[mask],
             fov_A=cols.fov_A,
             lattice_basis_A=cols.lattice_basis_A,
+            is_partial=cols.is_partial,
         )

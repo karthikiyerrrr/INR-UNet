@@ -129,3 +129,27 @@ def test_mix_mode_samples_at_configured_proportions():
         if bool(mask.all()):
             full_count += 1
     assert 0.78 < full_count / trials < 0.95             # ~0.87 full draws
+
+
+def test_finite_support_preserves_is_partial():
+    import torch
+    from omegaconf import OmegaConf
+
+    from inr_unet.config import ExperimentConfig
+    from inr_unet.data.generation.structures import ColumnList
+    from inr_unet.data.occupancy import FiniteSupportProvider
+
+    class _Inner:
+        def __len__(self):
+            return 1
+
+        def get(self, scene_idx):
+            return ColumnList(
+                positions_A=torch.zeros(3, 2), z=torch.ones(3), count=torch.ones(3),
+                fov_A=20.0, is_partial=True,
+            )
+
+    occ = OmegaConf.structured(ExperimentConfig).data.occupancy
+    occ.mode = "full"  # keep all columns so the wrapper only copies fields through
+    wrapped = FiniteSupportProvider(_Inner(), occ, master_seed=0)
+    assert wrapped.get(0).is_partial is True
