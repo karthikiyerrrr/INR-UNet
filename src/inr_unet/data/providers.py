@@ -102,6 +102,7 @@ class CIFProvider:
         partial_fov_prob: float = 0.0,
         supercell_nx_range: tuple[int, int] = (1, 3),
         supercell_ny_range: tuple[int, int] = (1, 2),
+        strip_prob: float = 0.0,
     ) -> None:
         self.n_scenes = int(n_scenes)
         self.master_seed = int(master_seed)
@@ -112,6 +113,7 @@ class CIFProvider:
         self.partial_fov_prob = float(partial_fov_prob)
         self.supercell_nx_range = (int(supercell_nx_range[0]), int(supercell_nx_range[1]))
         self.supercell_ny_range = (int(supercell_ny_range[0]), int(supercell_ny_range[1]))
+        self.strip_prob = float(strip_prob)
         manifest = yaml.safe_load(Path(manifest_path).read_text())
         self._cif_dir = Path(manifest_path).parent
         self._entries = manifest["entries"]
@@ -141,9 +143,25 @@ class CIFProvider:
         use_partial = bool(rng.random() < self.partial_fov_prob)
         supercell = None
         if use_partial:
-            nx = int(rng.integers(self.supercell_nx_range[0], self.supercell_nx_range[1] + 1))
-            ny = int(rng.integers(self.supercell_ny_range[0], self.supercell_ny_range[1] + 1))
-            supercell = (nx, ny)
+            if rng.random() < self.strip_prob:
+                # elongated n x 1 row: read in-plane spacing from a (1,1) projection, size n to span
+                # ~0.4-0.65 x FOV so the row stays framed; sampler rotation then tilts it.
+                long_axis = int(rng.random() < 0.5)
+                _, _, _, basis0 = project_structure(
+                    self._structure(entry["cif"]),
+                    entry["zone_axis"],
+                    fov_A=fov_A,
+                    n_exponent=self.n_exponent,
+                    group_tol_A=self.group_tol_A,
+                    supercell=(1, 1),
+                )
+                spacing = float(torch.linalg.norm(basis0[long_axis]))
+                ncell = max(3, round(float(rng.uniform(0.4, 0.65)) * fov_A / max(spacing, 1e-6)))
+                supercell = (ncell, 1) if long_axis == 0 else (1, ncell)
+            else:
+                nx = int(rng.integers(self.supercell_nx_range[0], self.supercell_nx_range[1] + 1))
+                ny = int(rng.integers(self.supercell_ny_range[0], self.supercell_ny_range[1] + 1))
+                supercell = (nx, ny)
         pos, z, count, basis = project_structure(
             self._structure(entry["cif"]),
             entry["zone_axis"],

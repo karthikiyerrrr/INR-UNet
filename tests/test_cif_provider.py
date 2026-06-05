@@ -86,3 +86,40 @@ def test_partial_fov_leaves_margins():
 def test_partial_fov_is_deterministic():
     a, b = _provider_partial().get(3), _provider_partial().get(3)
     assert torch.equal(a.positions_A, b.positions_A)
+
+
+def _ratio(scene):
+    span = scene.positions_A.max(dim=0).values - scene.positions_A.min(dim=0).values
+    return float(span.max() / span.min().clamp(min=1e-6))
+
+
+def _provider_strip(seed=0):
+    return CIFProvider(
+        manifest_path="src/inr_unet/data/cif/manifest.yaml",
+        n_scenes=6, master_seed=seed, n_exponent=1.7, group_tol_A=0.4,
+        scene_fov_A=(60.0, 80.0), rotation_jitter_deg=0.0,
+        partial_fov_prob=1.0, strip_prob=1.0,
+    )
+
+
+def _provider_blob(seed=0):
+    return CIFProvider(
+        manifest_path="src/inr_unet/data/cif/manifest.yaml",
+        n_scenes=6, master_seed=seed, n_exponent=1.7, group_tol_A=0.4,
+        scene_fov_A=(60.0, 80.0), rotation_jitter_deg=0.0,
+        partial_fov_prob=1.0, strip_prob=0.0,
+        supercell_nx_range=(2, 2), supercell_ny_range=(2, 2),
+    )
+
+
+def test_strip_is_more_elongated_than_blob():
+    strip = _provider_strip().get(2)
+    blob = _provider_blob().get(2)
+    assert strip.positions_A.shape[0] > 0 and blob.positions_A.shape[0] > 0
+    assert _ratio(strip) >= 3.0          # an n x 1 row is strongly elongated
+    assert _ratio(strip) > _ratio(blob)  # ... and more so than a compact 2x2 blob
+
+
+def test_strip_is_deterministic():
+    a, b = _provider_strip().get(3), _provider_strip().get(3)
+    assert torch.equal(a.positions_A, b.positions_A)
