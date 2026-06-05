@@ -68,6 +68,24 @@ train:
   seed: 0
   loss: weighted_mse
   fg_weight: 10.0
+  weight_decay: 1.0e-4
+  warmup_frac: 0.05
+  scheduler: cosine
+  grad_clip_norm: 1.0
+  grad_accum_steps: 1
+  amp: true
+  eval_every: 1
+  early_stop_patience: 15
+  split:
+    train_frac: 0.7
+    val_frac: 0.15
+    seed: 0
+  eval:
+    eval_draws_per_scene: 4
+    threshold: 0.5
+    min_distance_px: 2.0
+    match_tol_px: 2.0
+    n_val_panels: 6
 generation:
   potential_backend: z_power
   sigma_potential_A: 0.4

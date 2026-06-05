@@ -100,12 +100,38 @@ class DataConfig:
 
 
 @dataclass
+class SplitConfig:
+    train_frac: float = 0.7
+    val_frac: float = 0.15   # test = remainder
+    seed: int = 0
+
+
+@dataclass
+class EvalConfig:
+    eval_draws_per_scene: int = 4
+    threshold: float = 0.5
+    min_distance_px: float = 2.0
+    match_tol_px: float = 2.0
+    n_val_panels: int = 6
+
+
+@dataclass
 class TrainConfig:
     epochs: int = 100
     lr: float = 1e-4
     seed: int = 0
     loss: str = "weighted_mse"   # {"weighted_mse", "dice_bce"}
     fg_weight: float = 10.0      # foreground weight lambda in weighted_mse_loss
+    weight_decay: float = 1e-4
+    warmup_frac: float = 0.05
+    scheduler: str = "cosine"    # {"cosine", "none"}
+    grad_clip_norm: float = 1.0
+    grad_accum_steps: int = 1
+    amp: bool = True             # bf16 autocast on CUDA; ignored on CPU
+    eval_every: int = 1
+    early_stop_patience: int = 15
+    split: SplitConfig = field(default_factory=SplitConfig)
+    eval: EvalConfig = field(default_factory=EvalConfig)
 
 
 @dataclass
