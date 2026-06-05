@@ -5,16 +5,20 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 import yaml
+from torch.utils.data import DataLoader, Subset
 
+from inr_unet.data import LIIFSegDataset
+from inr_unet.data.generation.structures import Grid
 from inr_unet.localization import peak_localization
 from inr_unet.losses import make_loss
+from inr_unet.registry import build_model
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -255,3 +259,128 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg: DictConfi
         total += float(loss.detach())
         n += 1
     return total / max(1, n)
+
+
+@dataclass(frozen=True)
+class EpochRecord:
+    epoch: int
+    train_loss: float
+    val_loss: float
+    val_precision: float
+    val_recall: float
+    val_f1: float
+    val_mean_offset_A: float
+    val_median_offset_A: float
+    lr: float
+
+
+@dataclass(frozen=True)
+class TrainResult:
+    history: list[EpochRecord]
+    best_epoch: int
+    best_val_f1: float
+    best_checkpoint: Path | None   # None if no eval epoch ran (best.pt was never written)
+    val_panels: dict[str, np.ndarray]
+
+
+def _make_panels(model, dataset, indices: list[int], device: str, k: int
+                 ) -> dict[str, np.ndarray]:
+    """Collect up to ``k`` (input, gt, pred) dense triplets from val tiles for visualization."""
+    model.eval()
+    ins, gts, preds = [], [], []
+    with torch.no_grad():
+        for idx in indices[:k]:
+            s = dataset.source.get(idx)
+            grid = Grid(dataset.source.crop_size, s.input_pixel_size_A,
+                        device=str(s.image.device))
+            gt = dataset.label_field.rasterize(s.positions_A, s.radii_A, grid)
+            pred = torch.sigmoid(model(s.image[None, None].to(device)))[0, 0].cpu()
+            ins.append(s.image.cpu().numpy())
+            gts.append(gt.cpu().numpy())
+            preds.append(pred.numpy())
+    if not ins:
+        empty = np.zeros((0, 0, 0), dtype="float32")
+        return {"input": empty, "gt": empty, "pred": empty}
+    return {"input": np.stack(ins), "gt": np.stack(gts), "pred": np.stack(preds)}
+
+
+def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
+    """Train INRUNet on the LIIF query path with per-epoch dense val eval, val-F1 selection,
+    early stopping, and resumable checkpoints. ``run_dir/checkpoints/{last,best}.pt`` are written
+    every epoch (put run_dir on persistent storage so a dropped session can resume_from last.pt)."""
+    run_dir = Path(run_dir)
+    ckpt_dir = run_dir / "checkpoints"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    seed = int(cfg.train.seed)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    model = build_model(cfg).to(device)
+    dataset = LIIFSegDataset(cfg)
+    splits = build_splits(cfg)
+    gen = torch.Generator()
+    loader = DataLoader(
+        Subset(dataset, splits.train), batch_size=int(cfg.data.batch_size),
+        shuffle=True, generator=gen, num_workers=int(cfg.data.num_workers),
+    )
+    loss_fn = make_loss(cfg)
+    optimizer = build_optimizer(model, cfg)
+    accum = max(1, int(cfg.train.grad_accum_steps))
+    steps_per_epoch = math.ceil(len(loader) / accum)
+    epochs = int(cfg.train.epochs)
+    scheduler = build_scheduler(optimizer, cfg, total_steps=epochs * steps_per_epoch)
+
+    start_epoch, best_val_f1, best_epoch = 0, -1.0, -1
+    history: list[EpochRecord] = []
+    if resume_from is not None:
+        ckpt = load_checkpoint(resume_from)
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        scheduler.load_state_dict(ckpt["scheduler"])
+        start_epoch = int(ckpt["epoch"]) + 1
+        best_val_f1 = float(ckpt["best_val_f1"])
+        best_epoch = int(ckpt["best_epoch"])
+        history = [EpochRecord(**r) for r in ckpt["history"]]
+        torch.set_rng_state(ckpt["torch_rng"])
+        np.random.set_state(ckpt["numpy_rng"])
+
+    eval_every = max(1, int(cfg.train.eval_every))
+    patience = int(cfg.train.early_stop_patience)
+    for epoch in range(start_epoch, epochs):
+        gen.manual_seed(seed + epoch)
+        train_loss = train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg, device)
+        is_eval = (epoch % eval_every == 0) or (epoch == epochs - 1)
+        improved = False
+        if is_eval:
+            m = evaluate(model, dataset, splits.val, cfg, device)
+            improved = m.f1 > best_val_f1
+            if improved:
+                best_val_f1, best_epoch = m.f1, epoch
+            history.append(EpochRecord(
+                epoch=epoch, train_loss=train_loss, val_loss=m.loss,
+                val_precision=m.precision, val_recall=m.recall, val_f1=m.f1,
+                val_mean_offset_A=m.mean_offset_A, val_median_offset_A=m.median_offset_A,
+                lr=optimizer.param_groups[0]["lr"],
+            ))
+        history_dicts = [asdict(r) for r in history]
+        save_checkpoint(
+            ckpt_dir / "last.pt", epoch=epoch, model=model, optimizer=optimizer,
+            scheduler=scheduler, best_val_f1=best_val_f1, best_epoch=best_epoch,
+            history=history_dicts,
+        )
+        if is_eval and improved:
+            save_checkpoint(
+                ckpt_dir / "best.pt", epoch=epoch, model=model, optimizer=optimizer,
+                scheduler=scheduler, best_val_f1=best_val_f1, best_epoch=best_epoch,
+                history=history_dicts,
+            )
+        if is_eval and patience and (epoch - best_epoch) >= patience:
+            break
+
+    panels = _make_panels(model, dataset, splits.val, device, int(cfg.train.eval.n_val_panels))
+    return TrainResult(
+        history=history, best_epoch=best_epoch, best_val_f1=best_val_f1,
+        best_checkpoint=(ckpt_dir / "best.pt") if best_epoch >= 0 else None,
+        val_panels=panels,
+    )
