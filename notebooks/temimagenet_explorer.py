@@ -1366,7 +1366,6 @@ def _(
                        margin=dict(l=_ML, r=_MR, t=_TTOP, b=_MB),
                        title_text="Reference vs augmented synthetic (cond1 pinned, rest randomized)")
     _fig
-
     return
 
 
@@ -1511,6 +1510,150 @@ def _(
     _fig.update_layout(height=340, width=1000, margin=dict(l=8, r=8, t=40, b=8),
                        legend=dict(x=0.30, y=0.98, xanchor="right", yanchor="top"))
     _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    ExperimentConfig,
+    LIIFSegDataset,
+    OmegaConf,
+    STEMSegDataset,
+    go,
+    make_subplots,
+    mo,
+):
+    # Tile inspection -- what the model actually ingests under the LOCKED configs/default.yaml.
+    # The comparison cell above shows the WHOLE render; this shows the physical-extent training
+    # TILE (crop_size px) for both heads. Row 1: UNet input + red column centers. Row 2: UNet
+    # rasterized mask. Row 3: LIIF queries colored by analytic gt. Titles flag full vs partial
+    # scene + input pixel size + tile extent + column count; the caption reports the empty-tile rate.
+    _tcfg = OmegaConf.merge(OmegaConf.structured(ExperimentConfig), OmegaConf.load("configs/default.yaml"))
+    _tcfg.data.synthetic.n_scenes = 12
+    _tcfg.data.synthetic.draws_per_scene = 6
+    _tcfg.data.synthetic.master_seed = 0
+    _tcfg.data.synthetic.sample_q = 1024
+    _tstem = STEMSegDataset(_tcfg)
+    _tliif = LIIFSegDataset(_tcfg)
+    _tS = _tstem.source.crop_size
+    _tdps = _tcfg.data.synthetic.draws_per_scene
+
+    # classify each scene partial (patch spans << scene fov) and tally empty tiles
+    _tprov = _tstem.source.provider
+    _tpart_scene = {}
+    for _sc in range(_tcfg.data.synthetic.n_scenes):
+        _cl = _tprov.get(_sc)
+        if _cl.positions_A.shape[0] == 0:
+            _tpart_scene[_sc] = True
+        else:
+            _spn = _cl.positions_A.max(0).values - _cl.positions_A.min(0).values
+            _tpart_scene[_sc] = bool(float(_spn.max()) < 0.7 * _cl.fov_A)
+
+    def _tncols(_s):
+        return int(((_s.positions_A >= 0) & (_s.positions_A <= _s.valid_extent_A)).all(dim=1).sum())
+
+    _efull = _tfull = _epart = _tpart = 0
+    _full_ids, _part_ids = [], []
+    for _i in range(len(_tstem)):
+        _s = _tstem.source.get(_i)
+        _empty = _tncols(_s) == 0
+        if _tpart_scene[_i // _tdps]:
+            _tpart += 1; _epart += _empty; _part_ids.append(_i)
+        else:
+            _tfull += 1; _efull += _empty; _full_ids.append(_i)
+
+    # show 3 full + 3 partial tiles so the contrast is visible
+    _show = _full_ids[:3] + _part_ids[:3]
+    _titles = []
+    for _i in _show:
+        _s = _tstem.source.get(_i)
+        _kind = "partial" if _tpart_scene[_i // _tdps] else "full"
+        _titles.append(f"#{_i} {_kind} · {_s.input_pixel_size_A:.2f} A/px · "
+                       f"{_s.valid_extent_A:.0f} A · {_tncols(_s)} cols")
+    _titles = _titles + [""] * (2 * len(_show))  # rows 2,3 inherit column position
+
+    _fig = make_subplots(rows=3, cols=len(_show), subplot_titles=_titles,
+                         horizontal_spacing=0.012, vertical_spacing=0.06)
+    for _c, _i in enumerate(_show):
+        _img, _mask = _tstem[_i]
+        _s = _tstem.source.get(_i)
+        _ppx = _s.positions_A.numpy() / _s.input_pixel_size_A
+        _in = (_ppx[:, 0] >= 0) & (_ppx[:, 0] < _tS) & (_ppx[:, 1] >= 0) & (_ppx[:, 1] < _tS)
+        _fig.add_trace(go.Heatmap(z=_img[0].numpy(), colorscale="gray", showscale=False), row=1, col=_c + 1)
+        _fig.add_trace(go.Scatter(x=_ppx[_in, 0], y=_ppx[_in, 1], mode="markers",
+                                  marker=dict(symbol="cross-thin", size=6, color="#ff3b3b",
+                                              line=dict(width=1.2, color="#ff3b3b")), showlegend=False),
+                       row=1, col=_c + 1)
+        _fig.add_trace(go.Heatmap(z=_mask[0].numpy(), colorscale="viridis", zmin=0, zmax=1, showscale=False),
+                       row=2, col=_c + 1)
+        _im, _coords, _cell, _gt = _tliif[_i]
+        _qpx = (_coords.numpy() + 1.0) / 2.0 * _tS
+        _fig.add_trace(go.Heatmap(z=_im[0].numpy(), colorscale="gray", showscale=False), row=3, col=_c + 1)
+        _fig.add_trace(go.Scatter(x=_qpx[:, 0], y=_qpx[:, 1], mode="markers",
+                                  marker=dict(size=3, color=_gt[:, 0].numpy(), colorscale="viridis",
+                                              cmin=0, cmax=1, showscale=False), showlegend=False),
+                       row=3, col=_c + 1)
+    _ncell = 3 * len(_show)
+    for _k in range(1, _ncell + 1):
+        _xa = "x" if _k == 1 else f"x{_k}"
+        _yk = "yaxis" if _k == 1 else f"yaxis{_k}"
+        _xk = "xaxis" if _k == 1 else f"xaxis{_k}"
+        _fig.layout[_yk].update(scaleanchor=_xa, constrain="domain", range=[_tS, 0], showticklabels=False, ticks="")
+        _fig.layout[_xk].update(constrain="domain", range=[0, _tS], showticklabels=False, ticks="")
+    _fig.update_annotations(font_size=11)
+    _fig.update_layout(height=620, width=940, margin=dict(l=8, r=8, t=30, b=8),
+                       title_text=f"Training tiles under locked default.yaml (S={_tS}px)")
+    _cap = mo.md(
+        f"**Empty-tile rate** &middot; full scenes **{_efull}/{_tfull}** ({_efull/max(_tfull,1):.0%}) &middot; "
+        f"partial scenes **{_epart}/{_tpart}** ({_epart/max(_tpart,1):.0%}) &middot; "
+        f"overall **{_efull+_epart}/{len(_tstem)}** ({(_efull+_epart)/len(_tstem):.0%}, intended ~15%). "
+        f"Rows: UNet input+centers / UNet mask / LIIF queries (gt)."
+    )
+    mo.vstack([_cap, _fig])
+    return
+
+
+@app.cell(hide_code=True)
+def _(ExperimentConfig, OmegaConf, STEMSegDataset, go, make_subplots, mo):
+
+    # Background-tile gallery -- what the model ingests as "empty". empty_crop_fraction=1.0 aims every
+    # partial draw into vacuum, so every tile here is a background draw. Titles: background field + dose.
+    _bgcfg = OmegaConf.merge(OmegaConf.structured(ExperimentConfig), OmegaConf.load("configs/default.yaml"))
+    _bgcfg.data.cif.partial_fov_prob = 1.0
+    _bgcfg.data.synthetic.empty_crop_fraction = 1.0
+    _bgcfg.data.synthetic.n_scenes = 20
+    _bgcfg.data.synthetic.draws_per_scene = 1
+    _bgcfg.data.synthetic.master_seed = 7
+    _bgds = STEMSegDataset(_bgcfg)
+    _bgsrc = _bgds.source
+    _bgS = _bgsrc.crop_size
+    _bgN, _bgcols = 20, 5
+    _bgrows = _bgN // _bgcols
+    _bgtitles, _bgimgs = [], []
+    for _bi in range(_bgN):
+        _bimg, _bmask = _bgds[_bi]
+        _bsc = _bgsrc.provider.get(_bi)
+        _bcond, _bp = _bgsrc.sampler.sample(_bi, max_fov_A=_bsc.fov_A)
+        _bnc = int((_bmask > 0).sum())
+        _bgimgs.append(_bimg[0].numpy())
+        _bgtitles.append(f"{_bp.background.kind} · N={_bp.noise.n_peak:.0f}" + (" · NONEMPTY!" if _bnc else ""))
+    _bgfig = make_subplots(rows=_bgrows, cols=_bgcols, subplot_titles=_bgtitles,
+                           horizontal_spacing=0.008, vertical_spacing=0.05)
+    for _bk in range(_bgN):
+        _bgfig.add_trace(go.Heatmap(z=_bgimgs[_bk], colorscale="gray", zmin=0, zmax=1, showscale=False),
+                         row=_bk // _bgcols + 1, col=_bk % _bgcols + 1)
+    for _bk in range(1, _bgN + 1):
+        _bxa = "x" if _bk == 1 else f"x{_bk}"
+        _byk = "yaxis" if _bk == 1 else f"yaxis{_bk}"
+        _bxk = "xaxis" if _bk == 1 else f"xaxis{_bk}"
+        _bgfig.layout[_byk].update(scaleanchor=_bxa, constrain="domain", range=[_bgS, 0], showticklabels=False, ticks="")
+        _bgfig.layout[_bxk].update(constrain="domain", range=[0, _bgS], showticklabels=False, ticks="")
+    _bgfig.update_annotations(font_size=9)
+    _bgfig.update_layout(height=720, width=900, margin=dict(l=6, r=6, t=26, b=6),
+                         title_text="Background-tile gallery — empty_crop_fraction=1.0 on partial scenes (S=%dpx)" % _bgS)
+    mo.vstack([mo.md("**Background tiles** the model learns as empty — variety of background field "
+                     "(constant / linear_ramp / nonlinear / perlin) + dose."), _bgfig])
+
     return
 
 
