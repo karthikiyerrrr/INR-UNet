@@ -3,11 +3,13 @@ training on the LIIF query path, and dense peak-localization evaluation."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+import torch
 import yaml
 
 if TYPE_CHECKING:
@@ -82,3 +84,37 @@ def build_splits(cfg: DictConfig) -> Splits:
         val=expand(val_scenes, eval_draws),
         test=expand(test_scenes, eval_draws),
     )
+
+
+def save_checkpoint(
+    path: Path,
+    *,
+    epoch: int,
+    model,
+    optimizer,
+    scheduler,
+    best_val_f1: float,
+    best_epoch: int,
+    history: list,
+) -> None:
+    """Atomically write full training state (incl. torch + numpy RNG) to ``path``."""
+    path = Path(path)
+    state = {
+        "epoch": epoch,
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "best_val_f1": best_val_f1,
+        "best_epoch": best_epoch,
+        "history": history,
+        "torch_rng": torch.get_rng_state(),
+        "numpy_rng": np.random.get_state(),
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(state, tmp)
+    os.replace(tmp, path)
+
+
+def load_checkpoint(path: Path) -> dict:
+    """Load a checkpoint dict written by :func:`save_checkpoint` (CPU map)."""
+    return torch.load(Path(path), map_location="cpu", weights_only=False)
