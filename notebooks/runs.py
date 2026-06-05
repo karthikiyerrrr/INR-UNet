@@ -7,6 +7,12 @@ A run directory holds:
   profile.parquet         polars [sweep, knob, value, fwd_ms, bwd_ms, step_ms, steps_per_s,
                                   samples_per_s, peak_mb, oom]
   overfit_sample.npz      float32 arrays: input[H,W], gt[H,W], pred[H,W]
+
+Training-run bundles additionally hold:
+  history.parquet         polars epoch-level metrics (epoch, train_loss, val_*, ...)
+  checkpoints/            directory of *.pt checkpoint files written by the trainer
+  val_panels.npz          float32 arrays of sample images from the final validation pass
+  test_metrics.json       final held-out test metrics (optional)
 """
 
 from __future__ import annotations
@@ -29,6 +35,11 @@ _PROFILE = "profile.parquet"
 _SAMPLE = "overfit_sample.npz"
 _SAMPLE_KEYS = ("input", "gt", "pred")
 _REQUIRED = (_META, _CONFIG, _LOSSES, _PROFILE, _SAMPLE)
+
+_HISTORY = "history.parquet"
+_VAL_PANELS = "val_panels.npz"
+_TEST_METRICS = "test_metrics.json"
+_TRAIN_REQUIRED = (_META, _CONFIG, _HISTORY)
 
 
 @dataclass(frozen=True)
@@ -107,3 +118,76 @@ def list_runs(runs_root: str | Path) -> list[Path]:
     if not runs_root.is_dir():
         return []
     return sorted(p for p in runs_root.iterdir() if p.is_dir() and (p / _META).exists())
+
+
+@dataclass(frozen=True)
+class TrainingRunArtifacts:
+    """One loaded training run: curves, config, sample panels, and checkpoint paths."""
+
+    run_dir: Path
+    meta: dict
+    config: DictConfig
+    history: pl.DataFrame
+    val_panels: dict[str, np.ndarray]
+    checkpoints: dict[str, Path]
+    test_metrics: dict | None
+
+
+def save_training_run(
+    run_dir: str | Path,
+    *,
+    meta: dict,
+    config: DictConfig,
+    history: pl.DataFrame,
+    val_panels: dict[str, np.ndarray],
+    test_metrics: dict | None = None,
+) -> Path:
+    """Write/refresh a training bundle. Unlike :func:`save_run` this updates ``run_dir`` in place
+    (the trainer has already written ``checkpoints/`` there and a resume finalize re-runs this),
+    so it does not refuse an existing directory."""
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / _META).write_text(json.dumps(meta, indent=2, sort_keys=True))
+    OmegaConf.save(config, run_dir / _CONFIG)
+    history.write_parquet(run_dir / _HISTORY)
+    if val_panels:
+        np.savez(
+            run_dir / _VAL_PANELS,
+            **{k: np.asarray(v, dtype="float32") for k, v in val_panels.items()},
+        )
+    if test_metrics is not None:
+        (run_dir / _TEST_METRICS).write_text(json.dumps(test_metrics, indent=2, sort_keys=True))
+    return run_dir
+
+
+def load_training_run(run_dir: str | Path) -> TrainingRunArtifacts:
+    """Load a training bundle written by :func:`save_training_run`."""
+    run_dir = Path(run_dir)
+    for name in _TRAIN_REQUIRED:
+        if not (run_dir / name).exists():
+            raise FileNotFoundError(f"training run {run_dir} is missing artifact {name}")
+    meta = json.loads((run_dir / _META).read_text())
+    config = OmegaConf.load(run_dir / _CONFIG)
+    history = pl.read_parquet(run_dir / _HISTORY)
+    val_panels: dict[str, np.ndarray] = {}
+    if (run_dir / _VAL_PANELS).exists():
+        with np.load(run_dir / _VAL_PANELS) as npz:
+            val_panels = {k: npz[k] for k in npz.files}
+    ckpt_dir = run_dir / "checkpoints"
+    checkpoints = (
+        {p.stem: p for p in sorted(ckpt_dir.glob("*.pt"))} if ckpt_dir.is_dir() else {}
+    )
+    test_metrics = (
+        json.loads((run_dir / _TEST_METRICS).read_text())
+        if (run_dir / _TEST_METRICS).exists()
+        else None
+    )
+    return TrainingRunArtifacts(
+        run_dir, meta, config, history, val_panels, checkpoints, test_metrics
+    )
+
+
+def run_kind(run_dir: str | Path) -> str:
+    """Classify a run bundle by ``meta['purpose']``: 'training' vs 'overfit' (default)."""
+    meta = json.loads((Path(run_dir) / _META).read_text())
+    return "training" if meta.get("purpose") == "training" else "overfit"
