@@ -15,7 +15,11 @@ import torch.nn.functional as F
 def _local_maxima(
     heatmap: torch.Tensor, threshold: float, min_distance_px: float
 ) -> tuple[list[int], list[int], list[float]]:
-    """Return (rows, cols, values) of NMS-filtered local maxima, descending by value."""
+    """Return (rows, cols, values) of NMS-filtered local maxima, descending by value.
+
+    A flat heatmap above ``threshold`` yields O(H*W) candidates before suppression; callers
+    should ensure the model is not emitting a near-constant response.
+    """
     h = heatmap[None, None]
     pooled = F.max_pool2d(h, kernel_size=3, stride=1, padding=1)
     is_max = (h == pooled) & (h > threshold)
@@ -101,7 +105,7 @@ def peak_localization(
             offsets_px.append(float(d[j]))
 
     n_matched = len(offsets_px)
-    precision = n_matched / n_pred if n_pred else (1.0 if n_gt == 0 else 0.0)
+    precision = n_matched / n_pred if n_pred else 0.0
     recall = n_matched / n_gt
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
     mean_offset_A = float(np.mean(offsets_px)) * pixel_size_A if offsets_px else float("nan")
