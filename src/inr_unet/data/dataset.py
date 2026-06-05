@@ -69,9 +69,9 @@ class LIIFSegDataset(Dataset):
         xy_A = torch.as_tensor(
             rng.uniform(0.0, s.valid_extent_A, size=(q, 2)), dtype=torch.float32
         )
-        gt = self.label_field.values_at(s.positions_A, s.radii_A, xy_A)[:, None]
+        tgt_px = float(rng.uniform(self.tgt_px_min, self.tgt_px_max))
+        gt = self.label_field.values_at(s.positions_A, s.radii_A, xy_A, tgt_px)[:, None]
         crop_extent_A = self.source.crop_size * s.input_pixel_size_A
         coords = 2.0 * (xy_A / crop_extent_A) - 1.0
-        tgt_px = float(rng.uniform(self.tgt_px_min, self.tgt_px_max))
         cell = torch.full((q, 2), 2.0 * tgt_px / crop_extent_A)
         return s.image[None], coords, cell, gt

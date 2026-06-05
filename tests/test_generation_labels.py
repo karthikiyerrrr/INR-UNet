@@ -84,7 +84,9 @@ def test_rasterize_matches_values_at_on_grid():
         yy, xx = grid.pixel_coords()
         q = torch.stack([(xx * grid.pixel_size_A).reshape(-1),
                          (yy * grid.pixel_size_A).reshape(-1)], dim=-1)
-        flat = field.values_at(pos, radii, q).reshape(grid.output_size, grid.output_size)
+        flat = field.values_at(
+            pos, radii, q, grid.pixel_size_A
+        ).reshape(grid.output_size, grid.output_size)
         assert torch.allclose(raster, flat, atol=1e-6)
 
 
@@ -123,3 +125,47 @@ def test_circular_values_at_empty_columns():
     vals = field.values_at(torch.zeros((0, 2)), torch.zeros((0,)), q)
     assert vals.shape == (3,)
     assert torch.all(vals == 0)
+
+
+def test_gaussian_sigma_floored_at_coarse_pixel():
+    field = GaussianField()  # fwhm 0.2 A -> physical sigma ~0.085 A
+    pos = torch.tensor([[0.0, 0.0]])
+    radii = torch.zeros(1)
+    q = torch.tensor([[0.2, 0.0]])  # 0.2 A off-center
+    physical = field.values_at(pos, radii, q).item()                       # no floor
+    floored = field.values_at(pos, radii, q, pixel_size_A=0.30).item()     # floor 0.30 px-A
+    assert floored > physical + 0.3  # floored sigma (0.30 A) is much wider
+
+
+def test_gaussian_sigma_not_floored_at_fine_pixel():
+    field = GaussianField()
+    pos = torch.tensor([[0.0, 0.0]])
+    radii = torch.zeros(1)
+    q = torch.tensor([[0.2, 0.0]])
+    physical = field.values_at(pos, radii, q).item()
+    fine = field.values_at(pos, radii, q, pixel_size_A=0.05).item()  # floor 0.05 < 0.085
+    assert fine == pytest.approx(physical, abs=1e-6)
+
+
+def test_gaussian_peak_height_unchanged_by_floor():
+    field = GaussianField()
+    pos = torch.tensor([[0.0, 0.0]])
+    radii = torch.zeros(1)
+    on_peak = field.values_at(pos, radii, torch.tensor([[0.0, 0.0]]), pixel_size_A=0.30)
+    assert on_peak[0].item() == pytest.approx(1.0, abs=1e-5)
+
+
+def test_gaussian_coarse_raster_is_a_blob_not_a_spike():
+    grid = Grid(output_size=32, pixel_size_A=0.30)  # coarse: physical sigma would be sub-Nyquist
+    pos = torch.tensor([[4.8, 4.8]])  # near grid center (16 px * 0.30)
+    raster = GaussianField().rasterize(pos, torch.zeros(1), grid)
+    assert (raster > 0.5).sum().item() >= 3  # a sampled blob, not a single-pixel spike
+
+
+def test_gaussian_field_respects_constructor_params():
+    narrow = GaussianField(fwhm_A=0.1, sigma_floor_px=0.0)
+    wide = GaussianField(fwhm_A=0.4, sigma_floor_px=0.0)
+    pos = torch.tensor([[0.0, 0.0]])
+    radii = torch.zeros(1)
+    q = torch.tensor([[0.15, 0.0]])
+    assert wide.values_at(pos, radii, q).item() > narrow.values_at(pos, radii, q).item()
