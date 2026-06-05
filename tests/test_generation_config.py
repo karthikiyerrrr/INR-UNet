@@ -110,3 +110,15 @@ def test_sampler_aberration_knobs_present_and_load():
     merged = load_config("configs/default.yaml")
     assert merged.generation.sampler.defocus_A_max == 40.0
     assert merged.generation.sampler.astig_a1_A_max == 40.0
+
+
+def test_synthetic_has_tile_fov_fields():
+    cfg = SyntheticDatasetConfig()
+    assert cfg.tile_fov_A_min == 12.0
+    assert cfg.tile_fov_A_max == 32.0
+
+
+def test_cif_has_strip_prob_default_zero():
+    from inr_unet.config import CIFConfig
+
+    assert CIFConfig().strip_prob == 0.0

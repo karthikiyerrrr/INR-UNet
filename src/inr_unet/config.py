@@ -44,6 +44,9 @@ class SyntheticDatasetConfig:
     label_kind: str = "gaussian"     # LABEL_FIELDS key
     target_pixel_size_A_min: float = 0.05
     target_pixel_size_A_max: float = 0.30
+    # physical-extent tile: each crop spans a bounded Angstrom window, then resamples to crop_size px
+    tile_fov_A_min: float = 12.0
+    tile_fov_A_max: float = 32.0
     master_seed: int = 0
     # finite-particle crop control (engaged only when occupancy.mode != "full")
     min_columns_in_crop: int = 1
@@ -62,6 +65,7 @@ class CIFConfig:
     partial_fov_prob: float = 0.0        # P(render a small supercell in a band vs fill the FOV)
     supercell_nx_range: list[int] = field(default_factory=lambda: [1, 3])
     supercell_ny_range: list[int] = field(default_factory=lambda: [1, 2])
+    strip_prob: float = 0.0  # P(elongated row-strip | partial); rest of partials are compact blobs
 
 
 @dataclass
