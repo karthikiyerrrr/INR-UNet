@@ -10,11 +10,14 @@ Available:
   sweeping the imaging condition, dose, background, scan noise, and the ADF weighting
   exponent. Columns are synthesized in-notebook; in the pipeline they come from upstream
   CIF / zone-axis projection.
+- **Single-run explorer** (`run_explorer.py`, marimo) — explore one run's artifacts from
+  `runs/`: the run metadata and config, the overfit loss curve (loss/bce/dice), the
+  predicted-vs-gt image, and the profiling table with per-sweep throughput. Run artifacts
+  are produced by the Colab smoke+profile notebook and pulled into `runs/`.
 
 Planned (deferred until the model API and run-artifact format exist):
 
 - **Colab quickstart** (committed `.ipynb`) — boilerplate notebook showing how to install
   the package and run the models on Colab. Personal Drive paths are stripped from the
   committed copy. Jupyter notebooks are gitignored; this one is force-added.
-- **Single-run explorer** (marimo) — explore one run's artifacts from `runs/` in depth.
 - **Multi-run comparison** (marimo) — compare runs based on what is available in `runs/`.
