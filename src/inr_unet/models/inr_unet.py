@@ -27,7 +27,7 @@ class INRUNet(nn.Module):
         coords: torch.Tensor | None = None,
         cell: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Segment ``img`` at query coords ([B, Q, n_classes]) or densely ([B, n_classes, H, W])."""
+        """Query ``coords`` [B,Q,2] -> [B,Q,n_classes]; else dense -> [B,n_classes,H,W]."""
         feat = self.encoder(img)
         if coords is not None:
             return self.decoder(feat, coords, cell)
