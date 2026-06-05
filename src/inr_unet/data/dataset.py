@@ -21,8 +21,12 @@ if TYPE_CHECKING:
 _QUERY_SALT = 3023
 
 
-def _build_label_field(syn: DictConfig):
-    """Construct the configured label field, passing the sigma policy to the Gaussian field."""
+def build_label_field(syn: DictConfig):
+    """Construct the configured label field.
+
+    GaussianField needs sigma params from config and is handled directly; all other
+    fields (e.g. CircularField) take no constructor args and are built via the registry.
+    """
     if syn.label_kind == "gaussian":
         return GaussianField(
             fwhm_A=float(syn.gaussian_fwhm_A),
@@ -36,7 +40,7 @@ class STEMSegDataset(Dataset):
 
     def __init__(self, cfg: DictConfig) -> None:
         self.source = SyntheticRenderSource(cfg)
-        self.label_field = _build_label_field(cfg.data.synthetic)
+        self.label_field = build_label_field(cfg.data.synthetic)
 
     def __len__(self) -> int:
         return len(self.source)
@@ -60,7 +64,7 @@ class LIIFSegDataset(Dataset):
     def __init__(self, cfg: DictConfig) -> None:
         syn = cfg.data.synthetic
         self.source = SyntheticRenderSource(cfg)
-        self.label_field = _build_label_field(syn)
+        self.label_field = build_label_field(syn)
         self.sample_q = int(syn.sample_q)
         self.tgt_px_min = float(syn.target_pixel_size_A_min)
         self.tgt_px_max = float(syn.target_pixel_size_A_max)
