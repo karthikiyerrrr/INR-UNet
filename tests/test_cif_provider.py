@@ -123,3 +123,15 @@ def test_strip_is_more_elongated_than_blob():
 def test_strip_is_deterministic():
     a, b = _provider_strip().get(3), _provider_strip().get(3)
     assert torch.equal(a.positions_A, b.positions_A)
+
+
+def test_partial_scene_is_flagged_and_centered():
+    scene = _provider_partial().get(2)
+    assert scene.is_partial is True
+    assert scene.positions_A.shape[0] > 0
+    centroid = scene.positions_A.mean(dim=0)
+    assert torch.allclose(centroid, torch.full((2,), scene.fov_A / 2.0), atol=1e-3)
+
+
+def test_full_scene_is_not_flagged_partial():
+    assert _provider().get(0).is_partial is False

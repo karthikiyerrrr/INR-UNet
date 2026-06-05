@@ -171,17 +171,9 @@ class CIFProvider:
             supercell=supercell,
         )
         if use_partial and pos.shape[0] > 0:
-            # place the small patch at a seeded offset inside the FOV, leaving margins
-            span = pos.max(dim=0).values - pos.min(dim=0).values
-            slack = torch.clamp(torch.tensor(fov_A) - span, min=0.0)
-            off = torch.tensor(
-                [
-                    float(rng.uniform(0.0, float(slack[0]))),
-                    float(rng.uniform(0.0, float(slack[1]))),
-                ],
-                dtype=pos.dtype,
-            )
-            pos = pos - pos.min(dim=0).values + off
+            # center the patch centroid in the FOV so the (center-cropped) render frames it.
+            # both rotations below pivot about the FOV center, leaving the centroid fixed.
+            pos = pos - pos.mean(dim=0) + fov_A / 2.0
         if pos.shape[0] > 0 and angle_deg != 0.0:
             theta = math.radians(angle_deg)
             c, s = math.cos(theta), math.sin(theta)
@@ -190,5 +182,6 @@ class CIFProvider:
             pos = (pos - center) @ rot.T + center
             basis = (rot @ basis.T).T
         return ColumnList(
-            positions_A=pos, z=z, count=count, fov_A=fov_A, lattice_basis_A=basis
+            positions_A=pos, z=z, count=count, fov_A=fov_A, lattice_basis_A=basis,
+            is_partial=use_partial,
         )
