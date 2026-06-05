@@ -64,3 +64,14 @@ def test_empty_prediction_and_empty_gt():
     out = peak_localization(hm, torch.zeros(0, 2), ps)
     assert out["precision"] == 1.0 and out["recall"] == 1.0 and out["f1"] == 1.0
     assert math.isnan(out["mean_offset_A"]) or out["mean_offset_A"] == 0.0
+
+
+def test_off_fov_gt_positions_excluded_from_recall():
+    ps = 0.1
+    hm = _splat(40, [(10, 10), (30, 30)])  # 40x40 grid -> in-FOV extent ~[0, 3.9] A
+    # two real in-FOV columns + one far outside the heatmap (x = 100 px = 10 A)
+    gt_A = torch.tensor([[10 * ps, 10 * ps], [30 * ps, 30 * ps], [100 * ps, 5 * ps]])
+    out = peak_localization(hm, gt_A, ps)
+    assert out["n_gt"] == 2  # off-FOV column dropped, not charged as a miss
+    assert out["recall"] == 1.0
+    assert out["precision"] == 1.0

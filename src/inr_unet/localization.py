@@ -69,6 +69,8 @@ def peak_localization(
 
     Returns precision, recall, f1, mean_offset_A (over matched peaks; NaN if none),
     n_pred, n_gt, n_matched. Matching is greedy by descending peak value, in pixel space.
+    Ground-truth positions outside the heatmap's field of view are dropped before scoring,
+    since they can never be detected.
     """
     hm = pred_heatmap.detach().float().cpu()
     rows, cols, _ = _local_maxima(hm, threshold, min_distance_px)
@@ -79,6 +81,15 @@ def peak_localization(
     ]  # (x=col, y=row), descending confidence
 
     gt = gt_positions_A.detach().float().cpu()
+    # only score columns whose centers fall within the heatmap; positions outside the
+    # field of view can never be detected, so excluding them keeps recall honest
+    if gt.shape[0]:
+        h_px, w_px = hm.shape
+        gp = gt / pixel_size_A
+        in_fov = (
+            (gp[:, 0] >= 0) & (gp[:, 0] <= w_px - 1) & (gp[:, 1] >= 0) & (gp[:, 1] <= h_px - 1)
+        )
+        gt = gt[in_fov]
     n_pred, n_gt = len(pred_xy_px), int(gt.shape[0])
 
     if n_gt == 0:
