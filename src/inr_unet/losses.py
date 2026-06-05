@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import partial
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from omegaconf import DictConfig
 
 
 class DiceLoss(nn.Module):
@@ -30,3 +34,27 @@ def dice_bce_loss(
     bce = F.binary_cross_entropy_with_logits(logits, target)
     dice = DiceLoss()(logits, target)
     return bce + dice_weight * dice
+
+
+def weighted_mse_loss(
+    logits: torch.Tensor, target: torch.Tensor, *, fg_weight: float = 10.0
+) -> torch.Tensor:
+    """Foreground-weighted MSE between sigmoid(logits) and a soft target in [0, 1].
+
+    Peaks are a tiny fraction of pixels, so an unweighted MSE is background-dominated.
+    The per-pixel weight ``1 + fg_weight * target`` scales the penalty with the target
+    value, emphasizing peaks without a hard threshold.
+    """
+    probs = torch.sigmoid(logits)
+    w = 1.0 + fg_weight * target
+    return (w * (probs - target) ** 2).sum() / w.sum()
+
+
+def make_loss(cfg: DictConfig) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+    """Build the training loss callable ``(logits, target) -> loss`` from config."""
+    name = cfg.train.loss
+    if name == "weighted_mse":
+        return partial(weighted_mse_loss, fg_weight=float(cfg.train.fg_weight))
+    if name == "dice_bce":
+        return dice_bce_loss
+    raise ValueError(f"unknown loss {name!r} (expected 'weighted_mse' or 'dice_bce')")
