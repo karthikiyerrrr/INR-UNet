@@ -13,6 +13,9 @@ import numpy as np
 import torch
 import yaml
 
+from inr_unet.localization import peak_localization
+from inr_unet.losses import make_loss
+
 if TYPE_CHECKING:
     from omegaconf import DictConfig
 
@@ -147,3 +150,81 @@ def make_lr_lambda(cfg: DictConfig, total_steps: int):
 def build_scheduler(optimizer, cfg: DictConfig, total_steps: int):
     """LambdaLR driving :func:`make_lr_lambda`; step once per optimizer step."""
     return torch.optim.lr_scheduler.LambdaLR(optimizer, make_lr_lambda(cfg, total_steps))
+
+
+@dataclass(frozen=True)
+class EvalMetrics:
+    """Aggregate held-out metrics for one eval pass."""
+
+    loss: float
+    precision: float        # macro (mean over tiles)
+    recall: float
+    f1: float
+    mean_offset_A: float     # mean over non-empty tiles' mean_offset_A (NaN if none matched)
+    median_offset_A: float
+    micro_precision: float   # pooled: sum matched / sum pred
+    micro_recall: float
+    n_tiles: int
+    n_empty: int             # tiles with n_gt == 0
+
+
+def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str) -> EvalMetrics:
+    """Run the dense path on each eval tile, score peak_localization, aggregate macro + micro.
+
+    ``dataset`` is a ``LIIFSegDataset``; its ``.source.get(idx)`` gives the dense image + atom
+    positions, and ``dataset[idx]`` gives the query-path tensors for the val loss. Pixel size is
+    ``input_pixel_size_A`` (= tile_fov_A / crop_size), never a sampler value.
+
+    Two forward passes per tile, both under ``no_grad``: the query path mirrors the training loss
+    (random coords + cell), while the dense path produces the full heatmap that peak_localization
+    needs. They are distinct computations, so the encoder pass is not shared. ``mean_offset_A`` is
+    averaged over *matched* peaks only (tiles with no match contribute nothing), so it reflects
+    localization accuracy where the model fired, not coverage.
+    """
+    model.eval()
+    ec = cfg.train.eval
+    loss_fn = make_loss(cfg)
+    total_loss, n = 0.0, 0
+    per_tile: list[dict] = []
+    micro_pred = micro_gt = micro_match = 0
+    offsets: list[float] = []
+    n_empty = 0
+    with torch.no_grad():
+        for idx in indices:
+            img, coords, cell, gt = (t[None].to(device) for t in dataset[idx])
+            total_loss += float(loss_fn(model(img, coords, cell), gt))
+            n += 1
+            s = dataset.source.get(idx)
+            dense = torch.sigmoid(model(s.image[None, None].to(device)))[0, 0]
+            m = peak_localization(
+                dense, s.positions_A, s.input_pixel_size_A,
+                threshold=float(ec.threshold),
+                min_distance_px=float(ec.min_distance_px),
+                match_tol_px=float(ec.match_tol_px),
+            )
+            per_tile.append(m)
+            micro_pred += m["n_pred"]
+            micro_gt += m["n_gt"]
+            micro_match += m["n_matched"]
+            if m["n_gt"] == 0:
+                n_empty += 1
+            elif not math.isnan(m["mean_offset_A"]):
+                offsets.append(m["mean_offset_A"])
+
+    macro_p = float(np.mean([m["precision"] for m in per_tile]))
+    macro_r = float(np.mean([m["recall"] for m in per_tile]))
+    macro_f1 = float(np.mean([m["f1"] for m in per_tile]))
+    return EvalMetrics(
+        loss=total_loss / max(1, n),
+        precision=macro_p,
+        recall=macro_r,
+        f1=macro_f1,
+        mean_offset_A=float(np.mean(offsets)) if offsets else float("nan"),
+        median_offset_A=float(np.median(offsets)) if offsets else float("nan"),
+        micro_precision=micro_match / micro_pred if micro_pred else 0.0,
+        # NaN, not 1.0: micro_gt == 0 means the whole eval set had no atoms (degenerate config),
+        # which is undefined recall rather than perfect recall.
+        micro_recall=micro_match / micro_gt if micro_gt else float("nan"),
+        n_tiles=len(per_tile),
+        n_empty=n_empty,
+    )
