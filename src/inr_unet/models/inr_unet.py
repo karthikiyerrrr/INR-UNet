@@ -19,7 +19,7 @@ class INRUNet(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.encoder = UNetEncoder(cfg.encoder)
-        self.decoder = LIIFDecoder(cfg.decoder)
+        self.decoder = LIIFDecoder(cfg.decoder, in_dim=int(cfg.encoder.feature_dim))
 
     def forward(
         self,
