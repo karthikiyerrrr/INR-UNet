@@ -70,6 +70,7 @@ class SyntheticRenderSource:
                 partial_fov_prob=float(cfg.data.cif.partial_fov_prob),
                 supercell_nx_range=tuple(cfg.data.cif.supercell_nx_range),
                 supercell_ny_range=tuple(cfg.data.cif.supercell_ny_range),
+                strip_prob=float(cfg.data.cif.strip_prob),
             )
         else:
             inner = SyntheticLatticeProvider(syn, self.master_seed)

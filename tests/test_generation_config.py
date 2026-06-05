@@ -72,7 +72,7 @@ def test_data_has_synthetic():
 def test_default_yaml_has_synthetic():
     cfg = load_config(CONFIG_PATH)
     assert cfg.data.synthetic.n_scenes == 64
-    assert cfg.data.synthetic.crop_size == 48
+    assert cfg.data.synthetic.crop_size == 128
     assert cfg.data.synthetic.sample_q == 2304
 
 
@@ -122,3 +122,16 @@ def test_cif_has_strip_prob_default_zero():
     from inr_unet.config import CIFConfig
 
     assert CIFConfig().strip_prob == 0.0
+
+
+def test_default_yaml_locks_comparison_distribution():
+    cfg = load_config(CONFIG_PATH)
+    assert cfg.data.provider == "cif"
+    assert cfg.data.cif.partial_fov_prob == 0.4
+    assert cfg.data.cif.strip_prob == 0.4
+    assert cfg.data.occupancy.mode == "full"
+    assert list(cfg.generation.sampler.conditions) == ["cond1"]
+    assert cfg.data.synthetic.crop_size == 128
+    assert cfg.data.synthetic.tile_fov_A_min == 12.0
+    assert cfg.data.synthetic.tile_fov_A_max == 32.0
+    assert cfg.generation.sampler.output_size_max == 512
