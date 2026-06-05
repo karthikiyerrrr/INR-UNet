@@ -41,7 +41,8 @@ class LIIFSegDataset(Dataset):
     """Yields ``(image, coords, cell, gt)`` for resolution-agnostic training.
 
     ``coords`` are (x, y) normalized to [-1, 1] over the full crop; ``cell`` is the
-    physical target pixel size (A/px); ``gt`` is the analytic label sampled at the
+    dimensionless target-pixel size in that normalized frame (``2 * tgt_px / crop_extent_A``,
+    matching LIIF's ``2 / n_target_px``); ``gt`` is the analytic label sampled at the
     continuous query coordinates.
     """
 
@@ -72,5 +73,5 @@ class LIIFSegDataset(Dataset):
         crop_extent_A = self.source.crop_size * s.input_pixel_size_A
         coords = 2.0 * (xy_A / crop_extent_A) - 1.0
         tgt_px = float(rng.uniform(self.tgt_px_min, self.tgt_px_max))
-        cell = torch.full((q, 2), tgt_px)
+        cell = torch.full((q, 2), 2.0 * tgt_px / crop_extent_A)
         return s.image[None], coords, cell, gt

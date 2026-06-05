@@ -39,11 +39,18 @@ def test_liif_shapes_and_conventions():
     assert gt.shape == (200, 1)
     assert float(coords.min()) >= -1.0 and float(coords.max()) <= 1.0
     assert float(gt.min()) >= 0.0 and float(gt.max()) <= 1.0
-    # cell is a single physical pixel size, in the configured range
+    # cell is DIMENSIONLESS: one target pixel's size in the normalized [-1, 1] crop, i.e.
+    # 2 * tgt_px / crop_extent_A. It must be uniform, in the derived range, and strictly
+    # smaller than the physical pixel size (the old bug emitted raw A/px).
     assert torch.unique(cell).numel() == 1
-    tgt = float(cell[0, 0])
+    cell_val = float(cell[0, 0])
+    s = ds.source.get(0)
+    crop_extent_A = ds.source.crop_size * s.input_pixel_size_A
     syn = cfg.data.synthetic
-    assert syn.target_pixel_size_A_min <= tgt <= syn.target_pixel_size_A_max
+    lo = 2.0 * syn.target_pixel_size_A_min / crop_extent_A
+    hi = 2.0 * syn.target_pixel_size_A_max / crop_extent_A
+    assert lo <= cell_val <= hi
+    assert cell_val < syn.target_pixel_size_A_min  # dimensionless, not raw A/px
 
 
 def test_both_datasets_deterministic():

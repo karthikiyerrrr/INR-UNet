@@ -43,10 +43,14 @@ def test_liif_pairs_are_sane_and_some_label_nonempty():
         assert image.shape == (1, s, s)
         assert coords.shape == (cfg.data.synthetic.sample_q, 2)
         assert float(coords.min()) >= -1.0 and float(coords.max()) <= 1.0
-        tgt = float(cell[0, 0])
+        cell_val = float(cell[0, 0])
+        sample = ds.source.get(i)
+        crop_extent_A = ds.source.crop_size * sample.input_pixel_size_A
         px_min = cfg.data.synthetic.target_pixel_size_A_min
         px_max = cfg.data.synthetic.target_pixel_size_A_max
-        assert px_min <= tgt <= px_max
+        lo = 2.0 * px_min / crop_extent_A
+        hi = 2.0 * px_max / crop_extent_A
+        assert lo <= cell_val <= hi  # dimensionless, not raw A/px
         assert torch.isfinite(gt).all()
         assert float(gt.min()) >= 0.0 and float(gt.max()) <= 1.0
         any_signal = any_signal or float(gt.max()) > 0.0
