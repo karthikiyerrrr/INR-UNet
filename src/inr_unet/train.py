@@ -228,3 +228,30 @@ def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str) -
         n_tiles=len(per_tile),
         n_empty=n_empty,
     )
+
+
+def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg: DictConfig, device: str
+                    ) -> float:
+    """One pass over ``loader`` on the LIIF query path; returns the mean per-batch loss."""
+    model.train()
+    accum = max(1, int(cfg.train.grad_accum_steps))
+    use_amp = bool(cfg.train.amp) and device == "cuda"
+    clip = float(cfg.train.grad_clip_norm)
+    autocast_device = "cuda" if device == "cuda" else "cpu"
+    n_batches = len(loader)
+    total, n = 0.0, 0
+    optimizer.zero_grad(set_to_none=True)
+    for i, (img, coords, cell, gt) in enumerate(loader):
+        img, coords, cell, gt = (t.to(device) for t in (img, coords, cell, gt))
+        with torch.autocast(device_type=autocast_device, dtype=torch.bfloat16, enabled=use_amp):
+            loss = loss_fn(model(img, coords, cell), gt)
+        (loss / accum).backward()
+        if (i + 1) % accum == 0 or (i + 1) == n_batches:
+            if clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+        total += float(loss.detach())
+        n += 1
+    return total / max(1, n)
