@@ -109,3 +109,14 @@ def test_save_run_missing_sample_key_raises(tmp_path):
         save_run(
             tmp_path / "r", meta=meta, config=config, losses=losses, profile=profile, sample=sample
         )
+
+
+def test_save_run_coerces_float64_sample_to_float32(tmp_path):
+    meta, config, losses, profile, sample = _fixture_args()
+    sample = {k: v.astype("float64") for k, v in sample.items()}
+    run_dir = tmp_path / "20260604-120000"
+    save_run(run_dir, meta=meta, config=config, losses=losses, profile=profile, sample=sample)
+    loaded = load_run(run_dir)
+    for key in ("input", "gt", "pred"):
+        assert loaded.sample[key].dtype == np.float32
+        assert np.allclose(loaded.sample[key], sample[key])

@@ -12,6 +12,9 @@ A run directory holds:
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,7 +44,7 @@ class RunArtifacts:
 
 
 def save_run(
-    run_dir,
+    run_dir: str | Path,
     *,
     meta: dict,
     config: DictConfig,
@@ -49,7 +52,12 @@ def save_run(
     profile: pl.DataFrame,
     sample: dict[str, np.ndarray],
 ) -> Path:
-    """Write a complete run bundle to ``run_dir``; refuse to overwrite an existing run."""
+    """Write a complete run bundle to ``run_dir``; refuse to overwrite an existing run.
+
+    The bundle is written to a temporary directory and atomically renamed into place,
+    so a failed or interrupted write never leaves a partial run behind. Float arrays in
+    ``sample`` are coerced to float32 on write.
+    """
     run_dir = Path(run_dir)
     if run_dir.exists():
         raise FileExistsError(f"run dir already exists, refusing to overwrite: {run_dir}")
@@ -57,16 +65,25 @@ def save_run(
     if missing:
         raise KeyError(f"sample is missing required arrays: {missing}")
 
-    run_dir.mkdir(parents=True)
-    (run_dir / _META).write_text(json.dumps(meta, indent=2, sort_keys=True))
-    OmegaConf.save(config, run_dir / _CONFIG)
-    losses.write_parquet(run_dir / _LOSSES)
-    profile.write_parquet(run_dir / _PROFILE)
-    np.savez(run_dir / _SAMPLE, **{k: np.asarray(sample[k], dtype="float32") for k in _SAMPLE_KEYS})
+    run_dir.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(dir=run_dir.parent))
+    try:
+        (tmp_dir / _META).write_text(json.dumps(meta, indent=2, sort_keys=True))
+        OmegaConf.save(config, tmp_dir / _CONFIG)
+        losses.write_parquet(tmp_dir / _LOSSES)
+        profile.write_parquet(tmp_dir / _PROFILE)
+        np.savez(
+            tmp_dir / _SAMPLE,
+            **{k: np.asarray(sample[k], dtype="float32") for k in _SAMPLE_KEYS},
+        )
+        os.replace(tmp_dir, run_dir)
+    except BaseException:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
     return run_dir
 
 
-def load_run(run_dir) -> RunArtifacts:
+def load_run(run_dir: str | Path) -> RunArtifacts:
     """Load a run bundle written by :func:`save_run`; raise if anything is missing."""
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
@@ -84,7 +101,7 @@ def load_run(run_dir) -> RunArtifacts:
     return RunArtifacts(run_dir, meta, config, losses, profile, sample)
 
 
-def list_runs(runs_root) -> list[Path]:
+def list_runs(runs_root: str | Path) -> list[Path]:
     """Return run directories under ``runs_root`` (those with a meta.json), sorted by name."""
     runs_root = Path(runs_root)
     if not runs_root.is_dir():
