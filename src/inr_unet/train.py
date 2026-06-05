@@ -3,6 +3,7 @@ training on the LIIF query path, and dense peak-localization evaluation."""
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -118,3 +119,31 @@ def save_checkpoint(
 def load_checkpoint(path: Path) -> dict:
     """Load a checkpoint dict written by :func:`save_checkpoint` (CPU map)."""
     return torch.load(Path(path), map_location="cpu", weights_only=False)
+
+
+def build_optimizer(model, cfg: DictConfig):
+    """AdamW with config lr + weight decay."""
+    return torch.optim.AdamW(
+        model.parameters(), lr=float(cfg.train.lr), weight_decay=float(cfg.train.weight_decay)
+    )
+
+
+def make_lr_lambda(cfg: DictConfig, total_steps: int):
+    """LR multiplier: linear warmup to 1.0 then cosine decay to 0; constant for 'none'."""
+    sched = str(cfg.train.scheduler)
+    warmup = int(float(cfg.train.warmup_frac) * total_steps)
+
+    def fn(step: int) -> float:
+        if sched == "none":
+            return 1.0
+        if step < warmup:
+            return (step + 1) / max(1, warmup)
+        progress = (step - warmup) / max(1, total_steps - warmup)
+        return 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+
+    return fn
+
+
+def build_scheduler(optimizer, cfg: DictConfig, total_steps: int):
+    """LambdaLR driving :func:`make_lr_lambda`; step once per optimizer step."""
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, make_lr_lambda(cfg, total_steps))
