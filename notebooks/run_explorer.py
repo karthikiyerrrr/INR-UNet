@@ -64,8 +64,10 @@ def _(art, mo):
 
 @app.cell(hide_code=True)
 def _(art, px):
-    _long = art.losses.unpivot(index="step", on=["loss", "bce", "dice"], variable_name="term", value_name="value")
-    _loss_fig = px.line(_long, x="step", y="value", color="term", title="Overfit loss (per training step)")
+    # plot every per-step metric column present (handles dice-era and regression-era runs)
+    _terms = [c for c in art.losses.columns if c != "step"]
+    _long = art.losses.unpivot(index="step", on=_terms, variable_name="term", value_name="value")
+    _loss_fig = px.line(_long, x="step", y="value", color="term", title="Overfit metrics (per training step)")
     _loss_fig.update_layout(height=360, width=760, margin=dict(l=8, r=8, t=40, b=8))
     _loss_fig
     return
