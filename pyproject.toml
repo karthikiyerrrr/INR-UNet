@@ -21,6 +21,7 @@ dev = [
     "ruff",
     "marimo",
     "plotly",
+    "polars",
 ]
 
 [build-system]
@@ -46,3 +47,4 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
