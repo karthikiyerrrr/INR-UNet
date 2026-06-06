@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -236,16 +237,32 @@ def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str) -
     )
 
 
-def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg: DictConfig, device: str
-                    ) -> float:
-    """One pass over ``loader`` on the LIIF query path; returns the mean per-batch loss."""
+def _mmss(seconds: float) -> str:
+    """Format a duration as MM:SS."""
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
+
+
+def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg: DictConfig, device: str,
+                    *, epoch: int | None = None) -> tuple[float, float]:
+    """One pass over ``loader`` on the LIIF query path.
+
+    Returns ``(mean per-batch loss, wall-time seconds)``. Prints first-batch latency and a periodic
+    heartbeat (running loss, samples/s, ETA). Cadence is ``cfg.train.log_every`` batches when > 0,
+    else ~20 lines/epoch; < 0 disables all per-batch printing.
+    """
     model.train()
     accum = max(1, int(cfg.train.grad_accum_steps))
     use_amp = bool(cfg.train.amp) and device == "cuda"
     clip = float(cfg.train.grad_clip_norm)
     autocast_device = "cuda" if device == "cuda" else "cpu"
     n_batches = len(loader)
-    total, n = 0.0, 0
+    log_every = int(cfg.train.log_every)
+    quiet = log_every < 0
+    stride = log_every if log_every > 0 else max(1, n_batches // 20)
+    prefix = f"[epoch {epoch + 1}]" if epoch is not None else "[train]"
+    total, n, seen = 0.0, 0, 0
+    t_epoch = time.perf_counter()
     optimizer.zero_grad(set_to_none=True)
     for i, (img, coords, cell, gt) in enumerate(loader):
         img, coords, cell, gt = (t.to(device) for t in (img, coords, cell, gt))
@@ -260,7 +277,17 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg: DictConfi
             optimizer.zero_grad(set_to_none=True)
         total += float(loss.detach())
         n += 1
-    return total / max(1, n)
+        seen += int(img.shape[0])
+        if i == 0 and not quiet:
+            print(f"{prefix} first batch in {time.perf_counter() - t_epoch:.1f}s "
+                  f"(worker spin-up + first render)", flush=True)
+        if not quiet and i != 0 and ((i + 1) % stride == 0 or (i + 1) == n_batches):
+            elapsed = time.perf_counter() - t_epoch
+            sps = seen / elapsed if elapsed > 0 else 0.0
+            eta = elapsed * (n_batches - (i + 1)) / (i + 1)
+            print(f"{prefix} batch {i + 1}/{n_batches} | loss={total / n:.4f} | "
+                  f"{sps:.1f} samp/s | elapsed {_mmss(elapsed)} | ETA {_mmss(eta)}", flush=True)
+    return total / max(1, n), time.perf_counter() - t_epoch
 
 
 @dataclass(frozen=True)
@@ -356,7 +383,8 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
     patience = int(cfg.train.early_stop_patience)
     for epoch in range(start_epoch, epochs):
         gen.manual_seed(seed + epoch)
-        train_loss = train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg, device)
+        train_loss, epoch_time_s = train_one_epoch(
+            model, loader, loss_fn, optimizer, scheduler, cfg, device, epoch=epoch)
         is_eval = (epoch % eval_every == 0) or (epoch == epochs - 1)
         improved = False
         if is_eval:

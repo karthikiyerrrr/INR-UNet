@@ -39,8 +39,41 @@ def test_epoch_runs_and_reduces_loss():
     opt = build_optimizer(model, cfg)
     sched = build_scheduler(opt, cfg, total_steps=20)
     loss_fn = make_loss(cfg)
-    first = train_one_epoch(model, loader, loss_fn, opt, sched, cfg, device="cpu")
+    first, t_first = train_one_epoch(model, loader, loss_fn, opt, sched, cfg, device="cpu")
+    assert t_first >= 0.0
     last = first
     for _ in range(9):
-        last = train_one_epoch(model, loader, loss_fn, opt, sched, cfg, device="cpu")
+        last, _ = train_one_epoch(model, loader, loss_fn, opt, sched, cfg, device="cpu")
     assert last < first
+
+
+def test_epoch_heartbeat_prints(capsys):
+    torch.manual_seed(0)
+    cfg = _cfg()
+    cfg.train.log_every = 1
+    ds = LIIFSegDataset(cfg)
+    loader = DataLoader(Subset(ds, list(range(len(ds)))), batch_size=2, shuffle=True)
+    model = build_model(cfg)
+    opt = build_optimizer(model, cfg)
+    sched = build_scheduler(opt, cfg, total_steps=20)
+    loss_fn = make_loss(cfg)
+    train_one_epoch(model, loader, loss_fn, opt, sched, cfg, device="cpu", epoch=0)
+    out = capsys.readouterr().out
+    assert "samp/s" in out
+    assert "first batch" in out
+
+
+def test_epoch_heartbeat_silent_when_off(capsys):
+    torch.manual_seed(0)
+    cfg = _cfg()
+    cfg.train.log_every = -1
+    ds = LIIFSegDataset(cfg)
+    loader = DataLoader(Subset(ds, list(range(len(ds)))), batch_size=2, shuffle=True)
+    model = build_model(cfg)
+    opt = build_optimizer(model, cfg)
+    sched = build_scheduler(opt, cfg, total_steps=20)
+    loss_fn = make_loss(cfg)
+    train_one_epoch(model, loader, loss_fn, opt, sched, cfg, device="cpu", epoch=0)
+    out = capsys.readouterr().out
+    assert "samp/s" not in out
+    assert "first batch" not in out
