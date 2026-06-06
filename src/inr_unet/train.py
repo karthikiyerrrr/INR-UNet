@@ -282,7 +282,10 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg: DictConfi
         if i == 0 and not quiet:
             print(f"{prefix} first batch in {time.perf_counter() - t_epoch:.1f}s "
                   f"(worker spin-up + first render)", flush=True)
-        if not quiet and i != 0 and ((i + 1) % stride == 0 or (i + 1) == n_batches):
+        last_batch = (i + 1) == n_batches
+        # heartbeat on stride boundaries and always on the last batch; skip i==0 (the first-batch
+        # line already covered it) unless that lone batch is also the last (single-batch epoch).
+        if not quiet and (last_batch or (i != 0 and (i + 1) % stride == 0)):
             elapsed = time.perf_counter() - t_epoch
             sps = seen / elapsed if elapsed > 0 else 0.0
             eta = elapsed * (n_batches - (i + 1)) / (i + 1)
