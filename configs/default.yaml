@@ -76,6 +76,8 @@ train:
   amp: true
   eval_every: 1
   early_stop_patience: 15
+  profile_datagen_samples: 8
+  log_every: 0
   split:
     train_frac: 0.7
     val_frac: 0.15

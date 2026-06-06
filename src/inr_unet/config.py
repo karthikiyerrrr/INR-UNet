@@ -130,6 +130,9 @@ class TrainConfig:
     amp: bool = True             # bf16 autocast on CUDA; ignored on CPU
     eval_every: int = 1
     early_stop_patience: int = 15
+    profile_datagen_samples: int = 8   # warm samples for the startup datagen probe; 0 skips it
+    # heartbeat cadence in batches; 0 = auto (~20/epoch); <0 = off
+    log_every: int = 0
     split: SplitConfig = field(default_factory=SplitConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
 

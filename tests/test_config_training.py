@@ -16,6 +16,8 @@ def test_train_defaults_present():
     assert t.amp is True
     assert t.eval_every == 1
     assert t.early_stop_patience == 15
+    assert t.profile_datagen_samples == 8
+    assert t.log_every == 0
 
 
 def test_split_and_eval_nested_defaults():
