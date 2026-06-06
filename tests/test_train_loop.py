@@ -29,6 +29,8 @@ def _cfg(epochs):
     cfg.train.split.train_frac = 0.5
     cfg.train.split.val_frac = 0.25
     cfg.train.eval.eval_draws_per_scene = 1
+    cfg.train.profile_datagen_samples = 0
+    cfg.train.log_every = -1
     return cfg
 
 
@@ -39,6 +41,7 @@ def test_train_returns_result_and_checkpoints(tmp_path):
     assert (tmp_path / "run" / "checkpoints" / "last.pt").exists()
     assert (tmp_path / "run" / "checkpoints" / "best.pt").exists()
     assert result.val_panels["input"].ndim == 3
+    assert all(r.epoch_time_s >= 0.0 for r in result.history)
 
 
 def test_resume_equals_uninterrupted(tmp_path):
@@ -52,3 +55,20 @@ def test_resume_equals_uninterrupted(tmp_path):
         assert torch.allclose(wa[k], wb[k], atol=1e-6), k
     assert [r.train_loss for r in full.history] == [r.train_loss for r in resumed.history]
     assert [r.val_f1 for r in full.history] == [r.val_f1 for r in resumed.history]
+
+
+def test_train_prints_probe_and_heartbeat(tmp_path, capsys):
+    cfg = _cfg(1)
+    cfg.train.profile_datagen_samples = 2
+    cfg.train.log_every = 1
+    train(cfg, run_dir=tmp_path / "run")
+    out = capsys.readouterr().out
+    assert "datagen profile" in out
+    assert "samp/s" in out
+
+
+def test_train_skips_probe_when_disabled(tmp_path, capsys):
+    cfg = _cfg(1)  # _cfg already sets profile_datagen_samples=0, log_every=-1
+    train(cfg, run_dir=tmp_path / "run")
+    out = capsys.readouterr().out
+    assert "datagen profile" not in out

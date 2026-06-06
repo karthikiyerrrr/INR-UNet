@@ -19,6 +19,7 @@ from inr_unet.data import LIIFSegDataset
 from inr_unet.data.generation.structures import Grid
 from inr_unet.localization import peak_localization
 from inr_unet.losses import make_loss
+from inr_unet.profiling import format_profile, profile_datagen
 from inr_unet.registry import build_model
 
 if TYPE_CHECKING:
@@ -301,6 +302,7 @@ class EpochRecord:
     val_mean_offset_A: float
     val_median_offset_A: float
     lr: float
+    epoch_time_s: float
 
 
 @dataclass(frozen=True)
@@ -381,6 +383,9 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
 
     eval_every = max(1, int(cfg.train.eval_every))
     patience = int(cfg.train.early_stop_patience)
+    if int(cfg.train.profile_datagen_samples) > 0:
+        print(format_profile(profile_datagen(cfg, n=int(cfg.train.profile_datagen_samples))),
+              flush=True)
     for epoch in range(start_epoch, epochs):
         gen.manual_seed(seed + epoch)
         train_loss, epoch_time_s = train_one_epoch(
@@ -396,11 +401,12 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
                 epoch=epoch, train_loss=train_loss, val_loss=m.loss,
                 val_precision=m.precision, val_recall=m.recall, val_f1=m.f1,
                 val_mean_offset_A=m.mean_offset_A, val_median_offset_A=m.median_offset_A,
-                lr=optimizer.param_groups[0]["lr"],
+                lr=optimizer.param_groups[0]["lr"], epoch_time_s=epoch_time_s,
             ))
             print(
                 f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  "
-                f"val_loss={m.loss:.4f}  val_f1={m.f1:.4f}  best_f1={best_val_f1:.4f}",
+                f"val_loss={m.loss:.4f}  val_f1={m.f1:.4f}  best_f1={best_val_f1:.4f}  "
+                f"epoch_time={_mmss(epoch_time_s)}",
                 flush=True,
             )
         history_dicts = [asdict(r) for r in history]
