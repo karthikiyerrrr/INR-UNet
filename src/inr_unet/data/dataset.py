@@ -73,10 +73,14 @@ class LIIFSegDataset(Dataset):
     def __len__(self) -> int:
         return len(self.source)
 
-    def __getitem__(
-        self, idx: int
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        s = self.source.get(idx)
+    def query_from_sample(
+        self, s, idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Sample ``sample_q`` query points for a rendered sample ``s``; returns (coords, cell, gt).
+
+        Split out of ``__getitem__`` so callers that already hold ``s`` (e.g. eval's dense path)
+        can derive the query tensors without rendering again.
+        """
         rng = np.random.default_rng(
             np.random.SeedSequence([self.master_seed, int(idx), _QUERY_SALT])
         )
@@ -89,4 +93,11 @@ class LIIFSegDataset(Dataset):
         crop_extent_A = self.source.crop_size * s.input_pixel_size_A
         coords = 2.0 * (xy_A / crop_extent_A) - 1.0
         cell = torch.full((q, 2), 2.0 * tgt_px / crop_extent_A)
+        return coords, cell, gt
+
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        s = self.source.get(idx)
+        coords, cell, gt = self.query_from_sample(s, idx)
         return s.image[None], coords, cell, gt

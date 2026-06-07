@@ -7,7 +7,7 @@ from inr_unet.config import load_config
 from inr_unet.data import LIIFSegDataset
 from inr_unet.losses import make_loss
 from inr_unet.registry import build_model
-from inr_unet.train import build_optimizer, build_scheduler, train_one_epoch
+from inr_unet.train import build_optimizer, build_scheduler, build_splits, evaluate, train_one_epoch
 
 CONFIG = "configs/default.yaml"
 
@@ -77,3 +77,23 @@ def test_epoch_heartbeat_silent_when_off(capsys):
     out = capsys.readouterr().out
     assert "samp/s" not in out
     assert "first batch" not in out
+
+
+def test_evaluate_renders_each_tile_once(monkeypatch):
+    torch.manual_seed(0)
+    cfg = _cfg()
+    cfg.data.synthetic.n_scenes = 3  # build_splits requires >= 3 scenes
+    ds = LIIFSegDataset(cfg)
+    model = build_model(cfg)
+    val = build_splits(cfg).val
+    calls: list[int] = []
+    real_get = ds.source.get
+
+    def counting_get(idx):
+        calls.append(idx)
+        return real_get(idx)
+
+    monkeypatch.setattr(ds.source, "get", counting_get)
+    metrics = evaluate(model, ds, val, cfg, device="cpu")
+    assert metrics.n_tiles == len(val)
+    assert sorted(calls) == sorted(val)  # exactly one source.get per tile (was two)

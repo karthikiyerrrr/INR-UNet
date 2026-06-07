@@ -214,10 +214,11 @@ def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str) -
     n_empty = 0
     with torch.no_grad():
         for idx in indices:
-            img, coords, cell, gt = (t[None].to(device) for t in dataset[idx])
+            s = dataset.source.get(idx)
+            coords, cell, gt = (t[None].to(device) for t in dataset.query_from_sample(s, idx))
+            img = s.image[None, None].to(device)
             total_loss += float(loss_fn(model(img, coords, cell), gt))
             n += 1
-            s = dataset.source.get(idx)
             dense = torch.sigmoid(model(s.image[None, None].to(device)))[0, 0]
             m = peak_localization(
                 dense, s.positions_A, s.input_pixel_size_A,
