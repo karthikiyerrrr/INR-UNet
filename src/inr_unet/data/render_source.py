@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from inr_unet.data.generation.renderer import TEMRenderer
 from inr_unet.data.generation.sampler import AugmentationSampler
 from inr_unet.data.occupancy import FiniteSupportProvider
-from inr_unet.data.providers import CIFProvider, SyntheticLatticeProvider
+from inr_unet.data.providers import CachingProvider, CIFProvider, SyntheticLatticeProvider
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -77,7 +77,9 @@ class SyntheticRenderSource:
         else:
             inner = SyntheticLatticeProvider(syn, self.master_seed)
         if str(cfg.data.occupancy.mode) != "full":
-            return FiniteSupportProvider(inner, cfg.data.occupancy, self.master_seed)
+            inner = FiniteSupportProvider(inner, cfg.data.occupancy, self.master_seed)
+        if bool(cfg.data.cache_scenes):
+            return CachingProvider(inner)
         return inner
 
     def __len__(self) -> int:

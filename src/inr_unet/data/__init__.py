@@ -12,7 +12,12 @@ from inr_unet.data.generation import (
 )
 from inr_unet.data.occupancy import FiniteSupportProvider
 from inr_unet.data.projection import project_structure
-from inr_unet.data.providers import CIFProvider, ColumnListProvider, SyntheticLatticeProvider
+from inr_unet.data.providers import (
+    CachingProvider,
+    CIFProvider,
+    ColumnListProvider,
+    SyntheticLatticeProvider,
+)
 from inr_unet.data.render_source import RenderedSample, SyntheticRenderSource
 from inr_unet.data.transforms import Normalize
 
@@ -21,6 +26,7 @@ __all__ = [
     "LIIFSegDataset",
     "SyntheticRenderSource",
     "RenderedSample",
+    "CachingProvider",
     "ColumnListProvider",
     "SyntheticLatticeProvider",
     "CIFProvider",

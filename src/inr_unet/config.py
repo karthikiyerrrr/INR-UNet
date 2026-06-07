@@ -94,6 +94,7 @@ class DataConfig:
     batch_size: int = 8
     num_workers: int = 4
     provider: str = "synthetic"  # "synthetic" | "cif"
+    cache_scenes: bool = True     # memoize each scene's projected ColumnList (idx-deterministic)
     synthetic: SyntheticDatasetConfig = field(default_factory=SyntheticDatasetConfig)
     cif: CIFConfig = field(default_factory=CIFConfig)
     occupancy: OccupancyConfig = field(default_factory=OccupancyConfig)

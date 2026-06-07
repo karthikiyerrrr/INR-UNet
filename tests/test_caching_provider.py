@@ -44,3 +44,35 @@ def test_caching_provider_distinct_scenes_each_miss_once():
 def test_caching_provider_len_delegates():
     inner = _CountingProvider(7)
     assert len(CachingProvider(inner)) == 7
+
+
+from inr_unet.config import load_config
+from inr_unet.data import LIIFSegDataset
+
+CONFIG = "configs/default.yaml"
+
+
+def _synth_cfg():
+    cfg = load_config(CONFIG)
+    cfg.data.provider = "synthetic"
+    cfg.data.synthetic.n_scenes = 4
+    cfg.data.synthetic.draws_per_scene = 3
+    cfg.data.synthetic.sample_q = 64
+    return cfg
+
+
+def test_ds_item_identical_with_and_without_cache():
+    cfg_on = _synth_cfg()
+    cfg_on.data.cache_scenes = True
+    cfg_off = _synth_cfg()
+    cfg_off.data.cache_scenes = False
+    ds_on = LIIFSegDataset(cfg_on)
+    ds_off = LIIFSegDataset(cfg_off)
+    for i in range(min(len(ds_on), 6)):
+        for ta, tb in zip(ds_on[i], ds_off[i]):
+            assert torch.equal(ta, tb), f"mismatch at idx {i}"
+
+
+def test_cache_scenes_default_wraps_provider():
+    ds = LIIFSegDataset(_synth_cfg())  # cache_scenes default True
+    assert isinstance(ds.source.provider, CachingProvider)
