@@ -323,6 +323,7 @@ class EpochRecord:
     val_median_offset_A: float
     lr: float
     epoch_time_s: float
+    eval_time_s: float
 
 
 @dataclass(frozen=True)
@@ -410,7 +411,9 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
         is_eval = (epoch % eval_every == 0) or (epoch == epochs - 1)
         improved = False
         if is_eval:
+            t_eval = time.perf_counter()
             m = evaluate(model, dataset, splits.val, cfg, device)
+            eval_time_s = time.perf_counter() - t_eval
             improved = m.f1 > best_val_f1
             if improved:
                 best_val_f1, best_epoch = m.f1, epoch
@@ -419,11 +422,12 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
                 val_precision=m.precision, val_recall=m.recall, val_f1=m.f1,
                 val_mean_offset_A=m.mean_offset_A, val_median_offset_A=m.median_offset_A,
                 lr=optimizer.param_groups[0]["lr"], epoch_time_s=epoch_time_s,
+                eval_time_s=eval_time_s,
             ))
             print(
                 f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  "
                 f"val_loss={m.loss:.4f}  val_f1={m.f1:.4f}  best_f1={best_val_f1:.4f}  "
-                f"epoch_time={_mmss(epoch_time_s)}",
+                f"epoch_time={_mmss(epoch_time_s)}  eval_time={_mmss(eval_time_s)}",
                 flush=True,
             )
         history_dicts = [asdict(r) for r in history]

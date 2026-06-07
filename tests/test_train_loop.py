@@ -72,3 +72,9 @@ def test_train_skips_probe_when_disabled(tmp_path, capsys):
     train(cfg, run_dir=tmp_path / "run")
     out = capsys.readouterr().out
     assert "datagen profile" not in out
+
+
+def test_history_records_eval_time(tmp_path):
+    result = train(_cfg(2), run_dir=tmp_path / "run")
+    assert all(r.eval_time_s >= 0.0 for r in result.history)
+    assert any(r.eval_time_s > 0.0 for r in result.history)  # eval actually ran
