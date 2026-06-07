@@ -10,9 +10,15 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path  # noqa: F401 — available for callers / future save/load
 from typing import TYPE_CHECKING
 
+import torch
+import torch.utils.data
 from omegaconf import OmegaConf
+
+from inr_unet.data.render_source import RenderedSample, SyntheticRenderSource
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -72,9 +78,130 @@ def cache_key(cfg: DictConfig) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
-class RenderCache:  # placeholder: implemented in Task 2
-    pass
+def _first(batch):
+    """Identity collate for batch_size=1 (module-level so DataLoader workers can pickle it)."""
+    return batch[0]
 
 
-class CachedRenderSource:  # placeholder: implemented in Task 2
-    pass
+class _IndexItemDataset(torch.utils.data.Dataset):
+    """Serves ``source.get(indices[i])`` so a DataLoader can render the pre-gen pass in parallel."""
+
+    def __init__(self, source, indices: list[int]) -> None:
+        self._source = source
+        self._indices = indices
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def __getitem__(self, i: int) -> RenderedSample:
+        return self._source.get(self._indices[i])
+
+
+def _progress(done: int, total: int) -> None:
+    if total and (done == total or done % max(1, total // 10) == 0):
+        print(f"[cache] rendered {done}/{total}", flush=True)
+
+
+def _render_all(cfg: DictConfig, source, indices: list[int]) -> list[RenderedSample]:
+    """Render every index once. Uses DataLoader workers when num_workers > 0 (single pass), else a
+    plain in-process loop. Order matches ``indices`` (no shuffle)."""
+    nw = int(cfg.data.num_workers)
+    if nw <= 0:
+        out = []
+        for n, i in enumerate(indices):
+            out.append(source.get(i))
+            _progress(n + 1, len(indices))
+        return out
+    loader = torch.utils.data.DataLoader(
+        _IndexItemDataset(source, indices), batch_size=1, num_workers=nw, collate_fn=_first
+    )
+    out = []
+    for n, s in enumerate(loader):
+        out.append(s)
+        _progress(n + 1, len(indices))
+    return out
+
+
+@dataclass
+class RenderCache:
+    """In-RAM bundle of RenderedSamples with CSR-ragged atom columns."""
+
+    key: str
+    crop_size: int
+    draws_per_scene: int
+    idx: torch.Tensor             # [N] int64, materialized indices (sorted)
+    image: torch.Tensor           # [N, S, S] float32
+    offsets: torch.Tensor         # [N+1] int64, CSR offsets into positions/radii
+    positions: torch.Tensor       # [sum M, 2] float32
+    radii: torch.Tensor           # [sum M] float32
+    pixel_size_A: torch.Tensor    # [N] float64 — preserves Python-float precision on round-trip
+    valid_extent_A: torch.Tensor  # [N] float64
+
+    @classmethod
+    def build(cls, cfg: DictConfig, indices, *, source=None) -> RenderCache:
+        idx_sorted = sorted(int(i) for i in indices)
+        source = source if source is not None else SyntheticRenderSource(cfg)
+        samples = _render_all(cfg, source, idx_sorted)
+        counts = [int(s.positions_A.shape[0]) for s in samples]
+        offsets = torch.zeros(len(samples) + 1, dtype=torch.int64)
+        if counts:
+            offsets[1:] = torch.tensor(counts, dtype=torch.int64).cumsum(0)
+        positions = (
+            torch.cat([s.positions_A for s in samples], dim=0)
+            if samples else torch.zeros(0, 2)
+        )
+        radii = (
+            torch.cat([s.radii_A for s in samples], dim=0)
+            if samples else torch.zeros(0)
+        )
+        return cls(
+            key=cache_key(cfg),
+            crop_size=int(source.crop_size),
+            draws_per_scene=int(source.draws_per_scene),
+            idx=torch.tensor(idx_sorted, dtype=torch.int64),
+            image=(torch.stack([s.image for s in samples]) if samples
+                   else torch.empty(0, int(source.crop_size), int(source.crop_size))),
+            offsets=offsets,
+            positions=positions.to(torch.float32),
+            radii=radii.to(torch.float32),
+            pixel_size_A=torch.tensor(
+                [s.input_pixel_size_A for s in samples], dtype=torch.float64
+            ),
+            valid_extent_A=torch.tensor(
+                [s.valid_extent_A for s in samples], dtype=torch.float64
+            ),
+        )
+
+
+class CachedRenderSource:
+    """Serves RenderedSamples from a RenderCache. Duck-types SyntheticRenderSource for what the
+    datasets, eval, and panels use: ``get(idx)``, ``crop_size``, ``draws_per_scene``, ``len``.
+
+    ``__len__`` is the number of *cached* indices (the materialized split union), not
+    scenes*draws; consumers index by the original idx via ``get`` and never rely on dense length.
+    """
+
+    def __init__(self, cache: RenderCache) -> None:
+        self._c = cache
+        self.crop_size = cache.crop_size
+        self.draws_per_scene = cache.draws_per_scene
+        self._row = {int(i): r for r, i in enumerate(cache.idx.tolist())}
+
+    def __len__(self) -> int:
+        return len(self._row)
+
+    def get(self, idx: int) -> RenderedSample:
+        r = self._row.get(int(idx))
+        if r is None:
+            raise KeyError(
+                f"idx {idx} not in render cache ({len(self._row)} cached indices)"
+            )
+        c = self._c
+        lo, hi = int(c.offsets[r]), int(c.offsets[r + 1])
+        return RenderedSample(
+            image=c.image[r],
+            positions_A=c.positions[lo:hi],
+            radii_A=c.radii[lo:hi],
+            input_pixel_size_A=float(c.pixel_size_A[r]),
+            valid_extent_A=float(c.valid_extent_A[r]),
+        )

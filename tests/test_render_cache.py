@@ -40,3 +40,35 @@ def test_key_sensitive_to_split():
     a, b = _cfg(), _cfg()
     b.train.split.val_frac = 0.25
     assert cache_key(a) != cache_key(b)
+
+
+def test_cached_get_matches_live():
+    cfg = _cfg()
+    live = SyntheticRenderSource(cfg)
+    src = CachedRenderSource(RenderCache.build(cfg, [0, 1, 2, 3]))
+    for i in range(4):
+        a, b = src.get(i), live.get(i)
+        assert torch.equal(a.image, b.image)
+        assert torch.equal(a.positions_A, b.positions_A)
+        assert torch.equal(a.radii_A, b.radii_A)
+        assert a.input_pixel_size_A == b.input_pixel_size_A
+        assert a.valid_extent_A == b.valid_extent_A
+
+
+def test_offsets_are_csr_monotonic():
+    cache = RenderCache.build(_cfg(), [0, 1, 2, 3])
+    offs = cache.offsets.tolist()
+    assert offs[0] == 0
+    assert offs == sorted(offs)
+    assert offs[-1] == cache.positions.shape[0]
+    assert cache.offsets.shape[0] == cache.idx.shape[0] + 1
+    # per-row column slice length matches the stored radii slice length
+    for r in range(cache.idx.shape[0]):
+        lo, hi = offs[r], offs[r + 1]
+        assert cache.positions[lo:hi].shape[0] == cache.radii[lo:hi].shape[0]
+
+
+def test_unknown_idx_raises():
+    src = CachedRenderSource(RenderCache.build(_cfg(), [0, 1]))
+    with pytest.raises(KeyError):
+        src.get(3)
