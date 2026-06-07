@@ -69,6 +69,9 @@ def profile_datagen(cfg: DictConfig, *, n: int = 8, indices: list[int] | None = 
     dataset[shuffled[0]]
     cold_s = time.perf_counter() - t0
 
+    # Nested-subtraction split: source.get embeds exactly one provider.get, and ds[i] embeds one
+    # source.get, so t_proj=P, t_src=P+render, t_full=P+render+values_at. The deltas isolate each
+    # part because projection is deterministic per scene_idx (same work each call, up to jitter).
     full, proj, rend, vals = [], [], [], []
     for idx in _take(shuffled, n, start=1):
         scene_idx = idx // source.draws_per_scene
