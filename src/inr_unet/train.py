@@ -160,6 +160,21 @@ def build_scheduler(optimizer, cfg: DictConfig, total_steps: int):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, make_lr_lambda(cfg, total_steps))
 
 
+def build_train_loader(dataset, indices: list[int], cfg: DictConfig, generator, device: str
+                       ) -> DataLoader:
+    """Training DataLoader over ``indices``. Worker knobs (persistent_workers, prefetch_factor)
+    are valid only when num_workers > 0; pin_memory is applied only on CUDA."""
+    nw = int(cfg.data.num_workers)
+    kwargs = dict(
+        batch_size=int(cfg.data.batch_size), shuffle=True, generator=generator,
+        num_workers=nw, pin_memory=bool(cfg.data.pin_memory) and device == "cuda",
+    )
+    if nw > 0:
+        kwargs["persistent_workers"] = bool(cfg.data.persistent_workers)
+        kwargs["prefetch_factor"] = int(cfg.data.prefetch_factor)
+    return DataLoader(Subset(dataset, indices), **kwargs)
+
+
 @dataclass(frozen=True)
 class EvalMetrics:
     """Aggregate held-out metrics for one eval pass."""
@@ -359,10 +374,7 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
     dataset = LIIFSegDataset(cfg)
     splits = build_splits(cfg)
     gen = torch.Generator()
-    loader = DataLoader(
-        Subset(dataset, splits.train), batch_size=int(cfg.data.batch_size),
-        shuffle=True, generator=gen, num_workers=int(cfg.data.num_workers),
-    )
+    loader = build_train_loader(dataset, splits.train, cfg, gen, device)
     loss_fn = make_loss(cfg)
     optimizer = build_optimizer(model, cfg)
     accum = max(1, int(cfg.train.grad_accum_steps))
