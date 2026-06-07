@@ -21,6 +21,10 @@ data:
   batch_size: 8
   num_workers: 4
   provider: cif
+  cache_scenes: true
+  persistent_workers: true
+  pin_memory: true
+  prefetch_factor: 2
   synthetic:
     n_scenes: 64
     draws_per_scene: 16

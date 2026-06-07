@@ -133,6 +133,7 @@ def test_occupancy_wrapper_applied_when_active():
 
     cfg = OmegaConf.structured(ExperimentConfig)
     cfg.data.occupancy.mode = "blob"
+    cfg.data.cache_scenes = False  # disable cache so .provider is the raw inner provider
     assert isinstance(SyntheticRenderSource(cfg).provider, FiniteSupportProvider)
 
 
@@ -140,6 +141,7 @@ def test_synthetic_full_provider_unwrapped():
     from inr_unet.data.providers import SyntheticLatticeProvider
 
     cfg = OmegaConf.structured(ExperimentConfig)
+    cfg.data.cache_scenes = False  # disable cache so .provider is the raw inner provider
     assert isinstance(SyntheticRenderSource(cfg).provider, SyntheticLatticeProvider)
 
 
