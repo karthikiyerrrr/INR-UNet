@@ -185,3 +185,26 @@ class CIFProvider:
             positions_A=pos, z=z, count=count, fov_A=fov_A, lattice_basis_A=basis,
             is_partial=use_partial,
         )
+
+
+class CachingProvider:
+    """Memoize a wrapped provider's deterministic per-scene output.
+
+    ``provider.get(scene_idx)`` is fully seeded by ``scene_idx`` (identical every call), so the
+    returned ``ColumnList`` is cached and reused across the scene's draws and across epochs. The
+    cache is per-process (each DataLoader worker builds its own) and unbounded (n_scenes is small).
+    """
+
+    def __init__(self, inner: ColumnListProvider) -> None:
+        self._inner = inner
+        self._cache: dict[int, ColumnList] = {}
+
+    def __len__(self) -> int:
+        return len(self._inner)
+
+    def get(self, scene_idx: int) -> ColumnList:
+        cached = self._cache.get(scene_idx)
+        if cached is None:
+            cached = self._inner.get(scene_idx)
+            self._cache[scene_idx] = cached
+        return cached
