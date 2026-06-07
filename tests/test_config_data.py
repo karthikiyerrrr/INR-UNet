@@ -47,3 +47,13 @@ def test_loader_pin_memory_only_on_cuda():
     ds = LIIFSegDataset(cfg)
     loader = build_train_loader(ds, list(range(len(ds))), cfg, torch.Generator(), "cpu")
     assert loader.pin_memory is False  # device == "cpu" disables it
+
+
+def test_loader_pin_memory_passes_true_for_cuda_device():
+    # device == "cuda" propagates pin_memory; DataLoader stores it at construction (no GPU needed).
+    cfg = _cfg()
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = True
+    ds = LIIFSegDataset(cfg)
+    loader = build_train_loader(ds, list(range(len(ds))), cfg, torch.Generator(), "cuda")
+    assert loader.pin_memory is True
