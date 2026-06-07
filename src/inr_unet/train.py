@@ -195,7 +195,8 @@ def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str) -
     """Run the dense path on each eval tile, score peak_localization, aggregate macro + micro.
 
     ``dataset`` is a ``LIIFSegDataset``; its ``.source.get(idx)`` gives the dense image + atom
-    positions, and ``dataset[idx]`` gives the query-path tensors for the val loss. Pixel size is
+    positions, and ``dataset.query_from_sample(s, idx)`` derives the query-path tensors from that
+    same rendered sample, so each tile is rendered exactly once. Pixel size is
     ``input_pixel_size_A`` (= tile_fov_A / crop_size), never a sampler value.
 
     Two forward passes per tile, both under ``no_grad``: the query path mirrors the training loss
@@ -219,7 +220,7 @@ def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str) -
             img = s.image[None, None].to(device)
             total_loss += float(loss_fn(model(img, coords, cell), gt))
             n += 1
-            dense = torch.sigmoid(model(s.image[None, None].to(device)))[0, 0]
+            dense = torch.sigmoid(model(img))[0, 0]
             m = peak_localization(
                 dense, s.positions_A, s.input_pixel_size_A,
                 threshold=float(ec.threshold),

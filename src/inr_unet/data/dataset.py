@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 import inr_unet.data.generation.labels  # noqa: F401  (registers LABEL_FIELDS entries)
 from inr_unet.data.generation.labels import GaussianField
 from inr_unet.data.generation.structures import Grid
-from inr_unet.data.render_source import SyntheticRenderSource
+from inr_unet.data.render_source import RenderedSample, SyntheticRenderSource
 from inr_unet.registry import LABEL_FIELDS
 
 if TYPE_CHECKING:
@@ -74,7 +74,7 @@ class LIIFSegDataset(Dataset):
         return len(self.source)
 
     def query_from_sample(
-        self, s, idx: int
+        self, s: RenderedSample, idx: int
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample ``sample_q`` query points for a rendered sample ``s``; returns (coords, cell, gt).
 
