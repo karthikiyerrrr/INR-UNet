@@ -72,3 +72,20 @@ def test_unknown_idx_raises():
     src = CachedRenderSource(RenderCache.build(_cfg(), [0, 1]))
     with pytest.raises(KeyError):
         src.get(3)
+
+
+def test_save_load_roundtrip(tmp_path):
+    cfg = _cfg()
+    cache = RenderCache.build(cfg, [0, 1, 2, 3])
+    path = tmp_path / "render_cache.pt"
+    cache.save(path)
+    loaded = RenderCache.load(path)
+    assert loaded.key == cache.key
+    live = SyntheticRenderSource(cfg)
+    src = CachedRenderSource(loaded)
+    a, b = src.get(2), live.get(2)
+    assert torch.equal(a.image, b.image)
+    assert torch.equal(a.positions_A, b.positions_A)
+    assert a.input_pixel_size_A == b.input_pixel_size_A
+    assert loaded.pixel_size_A.dtype == torch.float64
+    assert loaded.idx.dtype == torch.int64

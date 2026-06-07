@@ -11,7 +11,7 @@ import hashlib
 import json
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path  # noqa: F401 — available for callers / future save/load
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
@@ -170,6 +170,38 @@ class RenderCache:
             valid_extent_A=torch.tensor(
                 [s.valid_extent_A for s in samples], dtype=torch.float64
             ),
+        )
+
+    def save(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                # informational only; cache invalidation is enforced via `key` (which folds in
+                # _SCHEMA_VERSION), not by reading this field back in load().
+                "schema_version": _SCHEMA_VERSION,
+                "key": self.key,
+                "crop_size": self.crop_size,
+                "draws_per_scene": self.draws_per_scene,
+                "idx": self.idx,
+                "image": self.image,
+                "offsets": self.offsets,
+                "positions": self.positions,
+                "radii": self.radii,
+                "pixel_size_A": self.pixel_size_A,
+                "valid_extent_A": self.valid_extent_A,
+            },
+            path,
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> RenderCache:
+        d = torch.load(Path(path), map_location="cpu", weights_only=True)
+        return cls(
+            key=d["key"], crop_size=d["crop_size"], draws_per_scene=d["draws_per_scene"],
+            idx=d["idx"], image=d["image"], offsets=d["offsets"],
+            positions=d["positions"], radii=d["radii"],
+            pixel_size_A=d["pixel_size_A"], valid_extent_A=d["valid_extent_A"],
         )
 
 
