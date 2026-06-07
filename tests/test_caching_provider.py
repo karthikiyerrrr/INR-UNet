@@ -67,7 +67,7 @@ def test_ds_item_identical_with_and_without_cache():
     ds_on = LIIFSegDataset(cfg_on)
     ds_off = LIIFSegDataset(cfg_off)
     for i in range(min(len(ds_on), 6)):
-        for ta, tb in zip(ds_on[i], ds_off[i], strict=False):
+        for ta, tb in zip(ds_on[i], ds_off[i], strict=True):
             assert torch.equal(ta, tb), f"mismatch at idx {i}"
 
 
