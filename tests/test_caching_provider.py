@@ -2,8 +2,12 @@
 
 import torch
 
+from inr_unet.config import load_config
+from inr_unet.data import LIIFSegDataset
 from inr_unet.data.generation.structures import ColumnList
 from inr_unet.data.providers import CachingProvider
+
+CONFIG = "configs/default.yaml"
 
 
 class _CountingProvider:
@@ -46,12 +50,6 @@ def test_caching_provider_len_delegates():
     assert len(CachingProvider(inner)) == 7
 
 
-from inr_unet.config import load_config
-from inr_unet.data import LIIFSegDataset
-
-CONFIG = "configs/default.yaml"
-
-
 def _synth_cfg():
     cfg = load_config(CONFIG)
     cfg.data.provider = "synthetic"
@@ -69,7 +67,7 @@ def test_ds_item_identical_with_and_without_cache():
     ds_on = LIIFSegDataset(cfg_on)
     ds_off = LIIFSegDataset(cfg_off)
     for i in range(min(len(ds_on), 6)):
-        for ta, tb in zip(ds_on[i], ds_off[i]):
+        for ta, tb in zip(ds_on[i], ds_off[i], strict=False):
             assert torch.equal(ta, tb), f"mismatch at idx {i}"
 
 
