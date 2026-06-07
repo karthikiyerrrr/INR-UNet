@@ -13,9 +13,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 import yaml
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Subset
 
 from inr_unet.data import LIIFSegDataset
+from inr_unet.data.cache import CachedRenderSource, RenderCache, cache_key
 from inr_unet.data.generation.structures import Grid
 from inr_unet.localization import peak_localization
 from inr_unet.losses import make_loss
@@ -356,6 +358,30 @@ def _make_panels(model, dataset, indices: list[int], device: str, k: int
     return {"input": np.stack(ins), "gt": np.stack(gts), "pred": np.stack(preds)}
 
 
+def build_or_load_cache(cfg: DictConfig, splits: Splits) -> CachedRenderSource | None:
+    """Return a CachedRenderSource for the split union, or None if caching is disabled.
+
+    Loads an existing bundle when its key matches; otherwise renders every split index once and
+    saves it. The key folds in render-affecting config, the split config, and the git SHA, so a
+    stale cache is never silently reused.
+    """
+    rc = cfg.data.render_cache
+    if not bool(rc.enabled):
+        return None
+    key = cache_key(cfg)
+    path = Path(rc.dir) / f"render_cache_{key}.pt"
+    if path.exists():
+        cache = RenderCache.load(path)
+        if cache.key == key:
+            print(f"[cache] loaded {len(cache.idx)} samples from {path}", flush=True)
+            return CachedRenderSource(cache)
+    indices = sorted(set(splits.train) | set(splits.val) | set(splits.test))
+    print(f"[cache] building {len(indices)} samples -> {path}", flush=True)
+    cache = RenderCache.build(cfg, indices)
+    cache.save(path)
+    return CachedRenderSource(cache)
+
+
 def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
     """Train INRUNet on the LIIF query path with per-epoch dense val eval, val-F1 selection,
     early stopping, and resumable checkpoints. ``run_dir/checkpoints/{last,best}.pt`` are written
@@ -374,10 +400,14 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
     np.random.seed(seed)
 
     model = build_model(cfg).to(device)
-    dataset = LIIFSegDataset(cfg)
     splits = build_splits(cfg)
+    cached = build_or_load_cache(cfg, splits)
+    dataset = LIIFSegDataset(cfg, source=cached)
     gen = torch.Generator()
-    loader = build_train_loader(dataset, splits.train, cfg, gen, device)
+    # An in-RAM cache makes worker processes pointless and harmful (fork + IPC overhead), so the
+    # cached path runs single-process; the live path keeps the configured workers.
+    loader_cfg = OmegaConf.merge(cfg, {"data": {"num_workers": 0}}) if cached else cfg
+    loader = build_train_loader(dataset, splits.train, loader_cfg, gen, device)
     loss_fn = make_loss(cfg)
     optimizer = build_optimizer(model, cfg)
     accum = max(1, int(cfg.train.grad_accum_steps))

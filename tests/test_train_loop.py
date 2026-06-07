@@ -78,3 +78,14 @@ def test_history_records_eval_time(tmp_path):
     result = train(_cfg(2), run_dir=tmp_path / "run")
     assert all(r.eval_time_s >= 0.0 for r in result.history)
     assert any(r.eval_time_s > 0.0 for r in result.history)  # eval actually ran
+
+
+def test_render_cache_matches_live_training(tmp_path):
+    live = train(_cfg(2), run_dir=tmp_path / "live")
+    cfg = _cfg(2)
+    cfg.data.render_cache.enabled = True
+    cfg.data.render_cache.dir = str(tmp_path / "cache")
+    cached = train(cfg, run_dir=tmp_path / "cached")
+    assert [r.train_loss for r in cached.history] == [r.train_loss for r in live.history]
+    assert [r.val_f1 for r in cached.history] == [r.val_f1 for r in live.history]
+    assert list((tmp_path / "cache").glob("*.pt"))   # cache bundle was written

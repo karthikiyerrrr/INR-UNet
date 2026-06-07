@@ -131,3 +131,50 @@ def test_render_cache_config_defaults():
     cfg = OmegaConf.structured(ExperimentConfig)
     assert cfg.data.render_cache.enabled is False   # opt-in; the Colab driver turns it on
     assert isinstance(cfg.data.render_cache.dir, str)
+
+
+def _splits_cfg(tmp_dir=None, enabled=False):
+    # build_splits needs >= 3 scenes per class (synthetic = 1 class)
+    cfg = _cfg(n_scenes=3, draws_per_scene=2)
+    cfg.train.eval.eval_draws_per_scene = 1
+    cfg.data.render_cache.enabled = enabled
+    if tmp_dir is not None:
+        cfg.data.render_cache.dir = str(tmp_dir)
+    return cfg
+
+
+def test_build_or_load_cache_disabled_returns_none():
+    from inr_unet.train import build_or_load_cache, build_splits
+
+    cfg = _splits_cfg(enabled=False)
+    assert build_or_load_cache(cfg, build_splits(cfg)) is None
+
+
+def test_build_or_load_cache_builds_then_loads(tmp_path):
+    from inr_unet.train import build_or_load_cache, build_splits
+
+    cfg = _splits_cfg(tmp_path, enabled=True)
+    splits = build_splits(cfg)
+    s1 = build_or_load_cache(cfg, splits)
+    assert s1 is not None
+    files = list(tmp_path.glob("*.pt"))
+    assert len(files) == 1                      # one bundle written
+    s2 = build_or_load_cache(cfg, splits)       # second call hits the file
+    assert s2 is not None
+    live = SyntheticRenderSource(cfg)
+    i = splits.train[0]
+    assert torch.equal(s2.get(i).image, live.get(i).image)
+
+
+def test_worker_build_matches_single_process():
+    # The worker-backed build path (num_workers > 0, used on Colab) must produce a byte-identical
+    # cache to the single-process build, since every sample is idx-deterministic.
+    single = RenderCache.build(_cfg(), [0, 1, 2, 3])
+    cfg_workers = _cfg()
+    cfg_workers.data.num_workers = 2
+    parallel = RenderCache.build(cfg_workers, [0, 1, 2, 3])
+    assert torch.equal(single.idx, parallel.idx)
+    assert torch.equal(single.image, parallel.image)
+    assert torch.equal(single.offsets, parallel.offsets)
+    assert torch.equal(single.positions, parallel.positions)
+    assert torch.equal(single.radii, parallel.radii)
