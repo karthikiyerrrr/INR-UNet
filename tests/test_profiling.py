@@ -1,4 +1,4 @@
-"""profile_datagen times datagen and projects an epoch ETA."""
+"""profile_datagen times the full ds[i] over shuffled indices and splits the cost three ways."""
 
 import math
 
@@ -32,15 +32,18 @@ def test_profile_datagen_fields():
     assert p.num_workers == cfg.data.num_workers
     assert p.n_train == len(build_splits(cfg).train)
     for v in (p.cold_s, p.warm_mean_s, p.warm_median_s, p.projection_mean_s,
-              p.render_crop_mean_s, p.est_secs_per_epoch, p.est_min_per_epoch):
+              p.render_crop_mean_s, p.values_at_mean_s, p.est_secs_per_epoch,
+              p.est_min_per_epoch):
         assert v >= 0.0
     assert math.isclose(p.est_min_per_epoch, p.est_secs_per_epoch / 60.0, rel_tol=1e-9)
-    assert p.render_crop_mean_s == max(0.0, p.warm_mean_s - p.projection_mean_s)
 
 
-def test_format_profile_is_readable():
+def test_format_profile_shows_three_way_split():
     cfg = _small_cfg()
     text = format_profile(profile_datagen(cfg, n=2))
     assert isinstance(text, str)
     assert "datagen profile" in text
+    assert "projection" in text
+    assert "render+crop" in text
+    assert "values_at" in text
     assert "epoch" in text
