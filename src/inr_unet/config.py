@@ -88,6 +88,14 @@ class OccupancyConfig:
 
 
 @dataclass
+class RenderCacheConfig:
+    # Pre-render the split's samples once and train from RAM (num_workers forced to 0). Opt-in:
+    # the Colab driver sets enabled=true and points dir at Drive so it survives disconnects.
+    enabled: bool = False
+    dir: str = "runs/render_cache"
+
+
+@dataclass
 class DataConfig:
     root: str = "data"
     image_size: int = 256
@@ -98,6 +106,7 @@ class DataConfig:
     persistent_workers: bool = True   # keep workers (and their scene cache) alive across epochs
     pin_memory: bool = True           # page-locked host buffers; applied only on CUDA
     prefetch_factor: int = 2          # batches prefetched per worker (num_workers > 0 only)
+    render_cache: RenderCacheConfig = field(default_factory=RenderCacheConfig)
     synthetic: SyntheticDatasetConfig = field(default_factory=SyntheticDatasetConfig)
     cif: CIFConfig = field(default_factory=CIFConfig)
     occupancy: OccupancyConfig = field(default_factory=OccupancyConfig)

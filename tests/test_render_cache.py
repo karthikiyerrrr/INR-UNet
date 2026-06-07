@@ -125,3 +125,9 @@ def test_stem_item_identical_live_vs_cached():
     cached_ds = STEMSegDataset(cfg, source=CachedRenderSource(RenderCache.build(cfg, [0, 1, 2, 3])))
     for t_live, t_cached in zip(live_ds[1], cached_ds[1], strict=True):
         assert torch.equal(t_live, t_cached)
+
+
+def test_render_cache_config_defaults():
+    cfg = OmegaConf.structured(ExperimentConfig)
+    assert cfg.data.render_cache.enabled is False   # opt-in; the Colab driver turns it on
+    assert isinstance(cfg.data.render_cache.dir, str)

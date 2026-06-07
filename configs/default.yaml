@@ -25,6 +25,9 @@ data:
   persistent_workers: true
   pin_memory: true
   prefetch_factor: 2
+  render_cache:
+    enabled: false
+    dir: runs/render_cache
   synthetic:
     n_scenes: 64
     draws_per_scene: 16
