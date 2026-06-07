@@ -89,3 +89,10 @@ def test_save_load_roundtrip(tmp_path):
     assert a.input_pixel_size_A == b.input_pixel_size_A
     assert loaded.pixel_size_A.dtype == torch.float64
     assert loaded.idx.dtype == torch.int64
+
+
+def test_exports_available_from_package():
+    from inr_unet.data import CachedRenderSource as CRS
+    from inr_unet.data import RenderCache as RC
+    from inr_unet.data import cache_key as ck
+    assert RC is RenderCache and CRS is CachedRenderSource and ck is cache_key

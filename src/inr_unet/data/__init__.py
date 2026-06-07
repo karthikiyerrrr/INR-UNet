@@ -1,5 +1,6 @@
 """Data generation, datasets, and transforms for INR-UNet."""
 
+from inr_unet.data.cache import CachedRenderSource, RenderCache, cache_key
 from inr_unet.data.dataset import LIIFSegDataset, STEMSegDataset
 from inr_unet.data.generation import (
     IMAGING_CONDITIONS,
@@ -26,6 +27,9 @@ __all__ = [
     "LIIFSegDataset",
     "SyntheticRenderSource",
     "RenderedSample",
+    "RenderCache",
+    "CachedRenderSource",
+    "cache_key",
     "CachingProvider",
     "ColumnListProvider",
     "SyntheticLatticeProvider",
