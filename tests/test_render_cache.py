@@ -96,3 +96,32 @@ def test_exports_available_from_package():
     from inr_unet.data import RenderCache as RC
     from inr_unet.data import cache_key as ck
     assert RC is RenderCache and CRS is CachedRenderSource and ck is cache_key
+
+
+def test_liif_and_stem_share_cached_image():
+    # Tamper the cache so a live rebuild would differ: proves both datasets read the injected
+    # source (not a fresh live one) AND that they share the same image for a given idx.
+    cfg = _cfg()
+    cache = RenderCache.build(cfg, [0, 1, 2, 3])
+    cache.image[2].zero_()
+    src = CachedRenderSource(cache)
+    liif = LIIFSegDataset(cfg, source=src)
+    stem = STEMSegDataset(cfg, source=src)
+    assert torch.equal(liif[2][0], stem[2][0])      # identical image for both models
+    assert float(liif[2][0].abs().sum()) == 0.0     # injected (zeroed) source is actually used
+
+
+def test_liif_item_identical_live_vs_cached():
+    cfg = _cfg()
+    live_ds = LIIFSegDataset(cfg)
+    cached_ds = LIIFSegDataset(cfg, source=CachedRenderSource(RenderCache.build(cfg, [0, 1, 2, 3])))
+    for t_live, t_cached in zip(live_ds[1], cached_ds[1], strict=True):
+        assert torch.equal(t_live, t_cached)
+
+
+def test_stem_item_identical_live_vs_cached():
+    cfg = _cfg()
+    live_ds = STEMSegDataset(cfg)
+    cached_ds = STEMSegDataset(cfg, source=CachedRenderSource(RenderCache.build(cfg, [0, 1, 2, 3])))
+    for t_live, t_cached in zip(live_ds[1], cached_ds[1], strict=True):
+        assert torch.equal(t_live, t_cached)

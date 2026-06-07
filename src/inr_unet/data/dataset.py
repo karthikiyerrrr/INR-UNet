@@ -17,6 +17,8 @@ from inr_unet.registry import LABEL_FIELDS
 if TYPE_CHECKING:
     from omegaconf import DictConfig
 
+    from inr_unet.data.cache import CachedRenderSource
+
 # Decorrelated RNG stream (length-3 SeedSequence root; see plan determinism note).
 _QUERY_SALT = 3023
 
@@ -38,8 +40,10 @@ def build_label_field(syn: DictConfig):
 class STEMSegDataset(Dataset):
     """Yields fixed-grid ``(image, mask)`` pairs for the baseline UNet."""
 
-    def __init__(self, cfg: DictConfig) -> None:
-        self.source = SyntheticRenderSource(cfg)
+    def __init__(
+        self, cfg: DictConfig, source: SyntheticRenderSource | CachedRenderSource | None = None
+    ) -> None:
+        self.source = source if source is not None else SyntheticRenderSource(cfg)
         self.label_field = build_label_field(cfg.data.synthetic)
 
     def __len__(self) -> int:
@@ -61,9 +65,11 @@ class LIIFSegDataset(Dataset):
     continuous query coordinates.
     """
 
-    def __init__(self, cfg: DictConfig) -> None:
+    def __init__(
+        self, cfg: DictConfig, source: SyntheticRenderSource | CachedRenderSource | None = None
+    ) -> None:
         syn = cfg.data.synthetic
-        self.source = SyntheticRenderSource(cfg)
+        self.source = source if source is not None else SyntheticRenderSource(cfg)
         self.label_field = build_label_field(syn)
         self.sample_q = int(syn.sample_q)
         self.tgt_px_min = float(syn.target_pixel_size_A_min)
