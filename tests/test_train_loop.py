@@ -89,3 +89,14 @@ def test_render_cache_matches_live_training(tmp_path):
     assert [r.train_loss for r in cached.history] == [r.train_loss for r in live.history]
     assert [r.val_f1 for r in cached.history] == [r.val_f1 for r in live.history]
     assert list((tmp_path / "cache").glob("*.pt"))   # cache bundle was written
+
+
+def test_train_baseline_runs_and_checkpoints(tmp_path):
+    cfg = _cfg(2)
+    cfg.model.name = "unet_baseline"
+    result = train(cfg, run_dir=tmp_path / "run")
+    assert isinstance(result, TrainResult)
+    assert len(result.history) == 2
+    assert (tmp_path / "run" / "checkpoints" / "last.pt").exists()
+    assert (tmp_path / "run" / "checkpoints" / "best.pt").exists()
+    assert result.val_panels["input"].ndim == 3
