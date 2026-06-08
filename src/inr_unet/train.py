@@ -1,5 +1,6 @@
-"""Training loop for INRUNet: structure-stratified splits, resumable multi-scene
-training on the LIIF query path, and dense peak-localization evaluation."""
+"""Training loop for INRUNet and the baseline UNet: structure-stratified splits, resumable
+multi-scene training via a per-model TrainPath (LIIF query or dense), and dense
+peak-localization evaluation."""
 
 from __future__ import annotations
 
@@ -8,15 +9,15 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 import torch
 import yaml
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Dataset, Subset
 
-from inr_unet.data import LIIFSegDataset
+from inr_unet.data import LIIFSegDataset, STEMSegDataset
 from inr_unet.data.cache import CachedRenderSource, RenderCache, cache_key
 from inr_unet.data.generation.structures import Grid
 from inr_unet.localization import peak_localization
@@ -26,6 +27,74 @@ from inr_unet.registry import build_model
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
+
+
+class TrainPath(Protocol):
+    """The three model-specific seams of the trainer; everything else is shared.
+
+    One instance per model kind decides how to build the dataset, turn a training batch into a
+    loss, and turn one eval tile into (val_loss, dense heatmap). The trainer holds a single loop;
+    swapping the instance swaps query-path for dense-path with no scattered conditionals.
+    """
+
+    def build_dataset(self, cfg: DictConfig, source) -> Dataset:
+        """Dataset feeding this path, sharing the given (optional) render source."""
+        ...
+
+    def step_loss(self, model, batch, loss_fn, device: str) -> tuple[torch.Tensor, int]:
+        """One training batch -> (loss, batch_size). Caller wraps this in autocast."""
+        ...
+
+    def eval_tile(
+        self, model, dataset, s, idx: int, loss_fn, device: str
+    ) -> tuple[float, torch.Tensor]:
+        """One eval tile -> (val_loss, dense heatmap [H, W]) for peak_localization."""
+        ...
+
+
+class QueryPath:
+    """INR-UNet LIIF query path (the historical trainer behavior, relocated unchanged)."""
+
+    def build_dataset(self, cfg: DictConfig, source):
+        return LIIFSegDataset(cfg, source=source)
+
+    def step_loss(self, model, batch, loss_fn, device: str) -> tuple[torch.Tensor, int]:
+        img, coords, cell, gt = (t.to(device) for t in batch)
+        return loss_fn(model(img, coords, cell), gt), int(img.shape[0])
+
+    def eval_tile(
+        self, model, dataset, s, idx: int, loss_fn, device: str
+    ) -> tuple[float, torch.Tensor]:
+        coords, cell, gt = (t[None].to(device) for t in dataset.query_from_sample(s, idx))
+        img = s.image[None, None].to(device)
+        val_loss = float(loss_fn(model(img, coords, cell), gt))
+        heatmap = torch.sigmoid(model(img))[0, 0]
+        return val_loss, heatmap
+
+
+class DensePath:
+    """Baseline fixed-resolution path: dense (img, mask) batches, dense val loss + heatmap."""
+
+    def build_dataset(self, cfg: DictConfig, source):
+        return STEMSegDataset(cfg, source=source)
+
+    def step_loss(self, model, batch, loss_fn, device: str) -> tuple[torch.Tensor, int]:
+        img, mask = (t.to(device) for t in batch)
+        return loss_fn(model(img), mask), int(img.shape[0])
+
+    def eval_tile(
+        self, model, dataset, s, idx: int, loss_fn, device: str
+    ) -> tuple[float, torch.Tensor]:
+        grid = Grid(dataset.source.crop_size, s.input_pixel_size_A, device=str(s.image.device))
+        mask = dataset.label_field.rasterize(s.positions_A, s.radii_A, grid)
+        img = s.image[None, None].to(device)
+        logits = model(img)
+        val_loss = float(loss_fn(logits, mask[None, None].to(device)))
+        heatmap = torch.sigmoid(logits)[0, 0]
+        return val_loss, heatmap
+
+
+PATHS: dict[str, TrainPath] = {"inr_unet": QueryPath(), "unet_baseline": DensePath()}
 
 
 @dataclass(frozen=True)
@@ -193,20 +262,22 @@ class EvalMetrics:
     n_empty: int             # tiles with n_gt == 0
 
 
-def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str) -> EvalMetrics:
-    """Run the dense path on each eval tile, score peak_localization, aggregate macro + micro.
+def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str,
+             *, path: TrainPath | None = None) -> EvalMetrics:
+    """Run each eval tile through ``path.eval_tile`` (per-model val loss + dense heatmap), score
+    peak_localization, aggregate macro + micro.
 
     ``dataset`` is a ``LIIFSegDataset``; its ``.source.get(idx)`` gives the dense image + atom
     positions, and ``dataset.query_from_sample(s, idx)`` derives the query-path tensors from that
     same rendered sample, so each tile is rendered exactly once. Pixel size is
     ``input_pixel_size_A`` (= tile_fov_A / crop_size), never a sampler value.
 
-    Two forward passes per tile, both under ``no_grad``: the query path mirrors the training loss
-    (random coords + cell), while the dense path produces the full heatmap that peak_localization
-    needs. They are distinct computations, so the encoder pass is not shared. ``mean_offset_A`` is
-    averaged over *matched* peaks only (tiles with no match contribute nothing), so it reflects
-    localization accuracy where the model fired, not coverage.
+    All forward passes run under ``no_grad``. ``mean_offset_A`` is averaged over *matched* peaks
+    only (tiles with no match contribute nothing), so it reflects localization accuracy where the
+    model fired, not coverage.
     """
+    if path is None:
+        path = PATHS[str(cfg.model.name)]
     model.eval()
     ec = cfg.train.eval
     loss_fn = make_loss(cfg)
@@ -218,11 +289,9 @@ def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str) -
     with torch.no_grad():
         for idx in indices:
             s = dataset.source.get(idx)
-            coords, cell, gt = (t[None].to(device) for t in dataset.query_from_sample(s, idx))
-            img = s.image[None, None].to(device)
-            total_loss += float(loss_fn(model(img, coords, cell), gt))
+            val_loss, dense = path.eval_tile(model, dataset, s, idx, loss_fn, device)
+            total_loss += val_loss
             n += 1
-            dense = torch.sigmoid(model(img))[0, 0]
             m = peak_localization(
                 dense, s.positions_A, s.input_pixel_size_A,
                 threshold=float(ec.threshold),
@@ -264,13 +333,16 @@ def _mmss(seconds: float) -> str:
 
 
 def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg: DictConfig, device: str,
-                    *, epoch: int | None = None) -> tuple[float, float]:
+                    *, path: TrainPath | None = None, epoch: int | None = None
+                    ) -> tuple[float, float]:
     """One pass over ``loader`` on the LIIF query path.
 
     Returns ``(mean per-batch loss, wall-time seconds)``. Prints first-batch latency and a periodic
     heartbeat (running loss, samples/s, ETA). Cadence is ``cfg.train.log_every`` batches when > 0,
     else ~20 lines/epoch; < 0 disables all per-batch printing.
     """
+    if path is None:
+        path = PATHS[str(cfg.model.name)]
     model.train()
     accum = max(1, int(cfg.train.grad_accum_steps))
     use_amp = bool(cfg.train.amp) and device == "cuda"
@@ -284,10 +356,9 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg: DictConfi
     total, n, seen = 0.0, 0, 0
     t_epoch = time.perf_counter()
     optimizer.zero_grad(set_to_none=True)
-    for i, (img, coords, cell, gt) in enumerate(loader):
-        img, coords, cell, gt = (t.to(device) for t in (img, coords, cell, gt))
+    for i, batch in enumerate(loader):
         with torch.autocast(device_type=autocast_device, dtype=torch.bfloat16, enabled=use_amp):
-            loss = loss_fn(model(img, coords, cell), gt)
+            loss, bs = path.step_loss(model, batch, loss_fn, device)
         (loss / accum).backward()
         if (i + 1) % accum == 0 or (i + 1) == n_batches:
             if clip > 0:
@@ -297,7 +368,7 @@ def train_one_epoch(model, loader, loss_fn, optimizer, scheduler, cfg: DictConfi
             optimizer.zero_grad(set_to_none=True)
         total += float(loss.detach())
         n += 1
-        seen += int(img.shape[0])
+        seen += bs
         if i == 0 and not quiet:
             print(f"{prefix} first batch in {time.perf_counter() - t_epoch:.1f}s "
                   f"(worker spin-up + first render)", flush=True)
@@ -400,9 +471,10 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
     np.random.seed(seed)
 
     model = build_model(cfg).to(device)
+    path = PATHS[str(cfg.model.name)]
     splits = build_splits(cfg)
     cached = build_or_load_cache(cfg, splits)
-    dataset = LIIFSegDataset(cfg, source=cached)
+    dataset = path.build_dataset(cfg, cached)
     gen = torch.Generator()
     # An in-RAM cache makes worker processes pointless and harmful (fork + IPC overhead), so the
     # cached path runs single-process; the live path keeps the configured workers.
@@ -437,12 +509,12 @@ def train(cfg: DictConfig, *, run_dir, resume_from=None) -> TrainResult:
     for epoch in range(start_epoch, epochs):
         gen.manual_seed(seed + epoch)
         train_loss, epoch_time_s = train_one_epoch(
-            model, loader, loss_fn, optimizer, scheduler, cfg, device, epoch=epoch)
+            model, loader, loss_fn, optimizer, scheduler, cfg, device, path=path, epoch=epoch)
         is_eval = (epoch % eval_every == 0) or (epoch == epochs - 1)
         improved = False
         if is_eval:
             t_eval = time.perf_counter()
-            m = evaluate(model, dataset, splits.val, cfg, device)
+            m = evaluate(model, dataset, splits.val, cfg, device, path=path)
             eval_time_s = time.perf_counter() - t_eval
             improved = m.f1 > best_val_f1
             if improved:
