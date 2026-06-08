@@ -14,10 +14,14 @@ Available:
   `runs/`: the run metadata and config, the overfit loss curve (loss/bce/dice), the
   predicted-vs-gt image, and the profiling table with per-sweep throughput. Run artifacts
   are produced by the Colab smoke+profile notebook and pulled into `runs/`.
+- **Run comparison** (`run_comparison.py`, marimo) — overlay any subset of training runs
+  from `runs/`: a side-by-side summary table, validation F1 and localization-offset curves,
+  and the held-out test metrics (detection rates and offsets). Built to weigh the INR-UNet
+  against the fixed-resolution UNet baseline, whose runs share a byte-identical data pipeline
+  and differ only in `model.name`.
 
 Planned (deferred until the model API and run-artifact format exist):
 
 - **Colab quickstart** (committed `.ipynb`) — boilerplate notebook showing how to install
   the package and run the models on Colab. Personal Drive paths are stripped from the
   committed copy. Jupyter notebooks are gitignored; this one is force-added.
-- **Multi-run comparison** (marimo) — compare runs based on what is available in `runs/`.
