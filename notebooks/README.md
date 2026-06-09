@@ -16,9 +16,11 @@ Available:
   are produced by the Colab smoke+profile notebook and pulled into `runs/`.
 - **Run comparison** (`run_comparison.py`, marimo) — overlay any subset of training runs
   from `runs/`: a side-by-side summary table, validation F1 and localization-offset curves,
-  and the held-out test metrics (detection rates and offsets). Built to weigh the INR-UNet
-  against the fixed-resolution UNet baseline, whose runs share a byte-identical data pipeline
-  and differ only in `model.name`.
+  and the held-out test metrics (detection rates and offsets). With exactly two runs selected it
+  also shows a heatmap diff: a matched-tile gallery (input / gt / both predictions / difference map)
+  and per-peak distributions of sub-pixel offset, peak height, effective FWHM, and off-peak floor.
+  Built to weigh the INR-UNet against the fixed-resolution UNet baseline, whose runs share a
+  byte-identical data pipeline and differ only in `model.name`.
 
 Planned (deferred until the model API and run-artifact format exist):
 

@@ -289,6 +289,7 @@ dependencies = [
     { name = "omegaconf" },
     { name = "pillow" },
     { name = "pymatgen" },
+    { name = "scipy" },
     { name = "tifffile" },
     { name = "torch" },
 ]
@@ -308,6 +309,7 @@ requires-dist = [
     { name = "omegaconf" },
     { name = "pillow" },
     { name = "pymatgen" },
+    { name = "scipy", specifier = ">=1.17.1" },
     { name = "tifffile" },
     { name = "torch" },
 ]
