@@ -133,7 +133,7 @@ class TrainStepProfile:
     model_name: str
     device: str
     n_batches: int
-    data_ms: float        # next(loader) + .to(device): dataset[i] (CPU rasterize/sample) + collate
+    data_ms: float        # next(loader) + .to(device) incl. H2D copy (CUDA-synced): dataset[i] rasterize/sample + collate  # noqa: E501
     forward_ms: float     # model(...) only
     loss_ms: float        # loss_fn(...) only
     backward_ms: float    # loss.backward()
@@ -159,8 +159,10 @@ def _forward_and_target(model, parts) -> tuple:
     if len(parts) == 4:
         img, coords, cell, gt = parts
         return model(img, coords, cell), gt
-    img, mask = parts
-    return model(img), mask
+    if len(parts) == 2:
+        img, mask = parts
+        return model(img), mask
+    raise ValueError(f"expected a 2- or 4-tensor batch, got {len(parts)}")
 
 
 def profile_train_step(cfg: DictConfig, *, n_batches: int = 20, warmup: int = 3
@@ -241,7 +243,7 @@ def profile_train_step(cfg: DictConfig, *, n_batches: int = 20, warmup: int = 3
     return TrainStepProfile(
         model_name=str(cfg.model.name),
         device=device,
-        n_batches=len(data),
+        n_batches=n_batches,
         data_ms=ms(data),
         forward_ms=ms(fwd),
         loss_ms=ms(loss_t),
@@ -271,7 +273,7 @@ def format_train_step_profile(p: TrainStepProfile) -> str:
     ]
     lines = [
         f"train-step profile  model={p.model_name}  device={p.device}  "
-        f"({p.n_batches} warm batches)"
+        f"({p.n_batches} measured batches)"
     ]
     for name, mean, median in rows:
         lines.append(

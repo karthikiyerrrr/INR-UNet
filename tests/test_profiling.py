@@ -83,7 +83,9 @@ def test_profile_train_step_fields_baseline():
     p = profile_train_step(base, n_batches=3, warmup=1)
     assert p.model_name == "unet_baseline"
     assert p.n_batches == 3
-    for v in (p.data_ms, p.forward_ms, p.loss_ms, p.backward_ms, p.step_ms):
+    for v in (p.data_ms, p.forward_ms, p.loss_ms, p.backward_ms, p.step_ms,
+              p.data_median_ms, p.forward_median_ms, p.loss_median_ms,
+              p.backward_median_ms, p.step_median_ms):
         assert v >= 0.0
 
 
