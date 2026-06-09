@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
+import torch
 from omegaconf import OmegaConf
 
 from inr_unet.data import LIIFSegDataset
@@ -123,3 +124,158 @@ def format_profile(p: DatagenProfile) -> str:
         f"  est epoch time:     ~{p.est_min_per_epoch:.1f} min   "
         f"(n_train={p.n_train}, num_workers={p.num_workers}, uncached upper bound)"
     )
+
+
+@dataclass(frozen=True)
+class TrainStepProfile:
+    """Per-phase wall-clock for one training step, averaged over warm batches (ms)."""
+
+    model_name: str
+    device: str
+    n_batches: int
+    data_ms: float        # next(loader) + .to(device): dataset[i] (CPU rasterize/sample) + collate
+    forward_ms: float     # model(...) only
+    loss_ms: float        # loss_fn(...) only
+    backward_ms: float    # loss.backward()
+    step_ms: float        # optimizer.step + scheduler.step + zero_grad
+    data_median_ms: float
+    forward_median_ms: float
+    loss_median_ms: float
+    backward_median_ms: float
+    step_median_ms: float
+
+
+def _sync(device: str) -> float:
+    """perf_counter, CUDA-synchronized so GPU phase timings are real (no-op on CPU)."""
+    if device == "cuda":
+        torch.cuda.synchronize()
+    return time.perf_counter()
+
+
+def _forward_and_target(model, parts) -> tuple:
+    """Split a moved batch into (model output, target). 4 tensors = LIIF query path
+    (img, coords, cell, gt); 2 = dense path (img, mask). Mirrors QueryPath/DensePath.step_loss
+    without importing them, so train.py stays untouched."""
+    if len(parts) == 4:
+        img, coords, cell, gt = parts
+        return model(img, coords, cell), gt
+    img, mask = parts
+    return model(img), mask
+
+
+def profile_train_step(cfg: DictConfig, *, n_batches: int = 20, warmup: int = 3
+                       ) -> TrainStepProfile:
+    """Time each phase of one training step (data / forward / loss / backward / step) for the
+    model in ``cfg``, building the model, dataset, loader, optimizer, and scheduler exactly as
+    ``train()`` does so the dense-vs-query asymmetry is measured in situ. Discards ``warmup``
+    batches, then averages ``n_batches``.
+    """
+    from inr_unet.losses import make_loss
+    from inr_unet.registry import build_model
+    from inr_unet.train import (
+        PATHS,
+        build_optimizer,
+        build_or_load_cache,
+        build_scheduler,
+        build_splits,
+        build_train_loader,
+    )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = build_model(cfg).to(device)
+    model.train()
+    path = PATHS[str(cfg.model.name)]
+    splits = build_splits(cfg)
+    cached = build_or_load_cache(cfg, splits)
+    dataset = path.build_dataset(cfg, cached)
+    loader_cfg = OmegaConf.merge(cfg, {"data": {"num_workers": 0}}) if cached else cfg
+    gen = torch.Generator()
+    gen.manual_seed(0)
+    loader = build_train_loader(dataset, splits.train, loader_cfg, gen, device)
+    loss_fn = make_loss(cfg)
+    optimizer = build_optimizer(model, cfg)
+    scheduler = build_scheduler(optimizer, cfg, total_steps=max(1, warmup + n_batches))
+
+    data, fwd, loss_t, bwd, step = [], [], [], [], []
+    it = iter(loader)
+    for i in range(warmup + n_batches):
+        t0 = _sync(device)
+        batch = next(it, None)
+        if batch is None:
+            it = iter(loader)
+            batch = next(it)
+        parts = [t.to(device) for t in batch]
+        t_data = _sync(device) - t0
+
+        t0 = _sync(device)
+        out, target = _forward_and_target(model, parts)
+        t_fwd = _sync(device) - t0
+
+        t0 = _sync(device)
+        ls = loss_fn(out, target)
+        t_loss = _sync(device) - t0
+
+        t0 = _sync(device)
+        ls.backward()
+        t_bwd = _sync(device) - t0
+
+        t0 = _sync(device)
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad(set_to_none=True)
+        t_step = _sync(device) - t0
+
+        if i >= warmup:
+            data.append(t_data)
+            fwd.append(t_fwd)
+            loss_t.append(t_loss)
+            bwd.append(t_bwd)
+            step.append(t_step)
+
+    def ms(xs: list) -> float:
+        return 1000.0 * float(np.mean(xs))
+
+    def med(xs: list) -> float:
+        return 1000.0 * float(np.median(xs))
+
+    return TrainStepProfile(
+        model_name=str(cfg.model.name),
+        device=device,
+        n_batches=len(data),
+        data_ms=ms(data),
+        forward_ms=ms(fwd),
+        loss_ms=ms(loss_t),
+        backward_ms=ms(bwd),
+        step_ms=ms(step),
+        data_median_ms=med(data),
+        forward_median_ms=med(fwd),
+        loss_median_ms=med(loss_t),
+        backward_median_ms=med(bwd),
+        step_median_ms=med(step),
+    )
+
+
+def format_train_step_profile(p: TrainStepProfile) -> str:
+    """Human-readable per-phase block (mean / median ms) for the speed A/B notebook."""
+    total = p.data_ms + p.forward_ms + p.loss_ms + p.backward_ms + p.step_ms
+
+    def pct(x: float) -> float:
+        return (100.0 * x / total) if total else 0.0
+
+    rows = [
+        ("data", p.data_ms, p.data_median_ms),
+        ("forward", p.forward_ms, p.forward_median_ms),
+        ("loss", p.loss_ms, p.loss_median_ms),
+        ("backward", p.backward_ms, p.backward_median_ms),
+        ("step", p.step_ms, p.step_median_ms),
+    ]
+    lines = [
+        f"train-step profile  model={p.model_name}  device={p.device}  "
+        f"({p.n_batches} warm batches)"
+    ]
+    for name, mean, median in rows:
+        lines.append(
+            f"  {name:<9} {mean:7.2f} ms mean / {median:7.2f} ms median ({pct(mean):4.0f}%)"
+        )
+    lines.append(f"  {'total':<9} {total:7.2f} ms/step")
+    return "\n".join(lines)

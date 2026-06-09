@@ -3,7 +3,14 @@
 import math
 
 from inr_unet.config import load_config
-from inr_unet.profiling import DatagenProfile, format_profile, profile_datagen
+from inr_unet.profiling import (
+    DatagenProfile,
+    TrainStepProfile,
+    format_profile,
+    format_train_step_profile,
+    profile_datagen,
+    profile_train_step,
+)
 from inr_unet.train import build_splits
 
 CONFIG = "configs/default.yaml"
@@ -47,3 +54,45 @@ def test_format_profile_shows_three_way_split():
     assert "render+crop" in text
     assert "values_at" in text
     assert "epoch" in text
+
+
+def _both_model_cfgs():
+    inr = _small_cfg()
+    base = _small_cfg()
+    base.model.name = "unet_baseline"
+    return inr, base
+
+
+def test_profile_train_step_fields_inr():
+    cfg = _small_cfg()
+    cfg.data.batch_size = 2
+    p = profile_train_step(cfg, n_batches=3, warmup=1)
+    assert isinstance(p, TrainStepProfile)
+    assert p.model_name == "inr_unet"
+    assert p.n_batches == 3
+    assert p.device == "cpu"
+    for v in (p.data_ms, p.forward_ms, p.loss_ms, p.backward_ms, p.step_ms,
+              p.data_median_ms, p.forward_median_ms, p.loss_median_ms,
+              p.backward_median_ms, p.step_median_ms):
+        assert v >= 0.0
+
+
+def test_profile_train_step_fields_baseline():
+    _, base = _both_model_cfgs()
+    base.data.batch_size = 2
+    p = profile_train_step(base, n_batches=3, warmup=1)
+    assert p.model_name == "unet_baseline"
+    assert p.n_batches == 3
+    for v in (p.data_ms, p.forward_ms, p.loss_ms, p.backward_ms, p.step_ms):
+        assert v >= 0.0
+
+
+def test_format_train_step_profile_lists_all_phases():
+    cfg = _small_cfg()
+    cfg.data.batch_size = 2
+    text = format_train_step_profile(profile_train_step(cfg, n_batches=2, warmup=1))
+    assert isinstance(text, str)
+    assert "train-step profile" in text
+    for phase in ("data", "forward", "loss", "backward", "step"):
+        assert phase in text
+    assert "inr_unet" in text
