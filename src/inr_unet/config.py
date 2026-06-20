@@ -26,6 +26,7 @@ class DecoderConfig:
     local_ensemble: bool = True
     feature_unfold: bool = True
     cell_decode: bool = True
+    pos_encode_freqs: int = 0
 
 
 @dataclass

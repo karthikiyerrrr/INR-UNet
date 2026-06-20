@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import DictConfig
 
 from inr_unet.registry import DECODERS
+
+
+def _posenc(rel: torch.Tensor, freqs: int) -> torch.Tensor:
+    """Sinusoidally expand a relative coordinate [..., 2] -> [..., 2*(1+2*freqs)].
+
+    freqs == 0 returns ``rel`` unchanged (the default no-op path).
+    """
+    if freqs <= 0:
+        return rel
+    out = [rel]
+    for k in range(freqs):
+        f = (2.0**k) * math.pi
+        out += [torch.sin(f * rel), torch.cos(f * rel)]
+    return torch.cat(out, dim=-1)
 
 
 def make_coord(
@@ -74,9 +90,10 @@ class LIIFDecoder(nn.Module):
         self.feature_unfold = bool(cfg.feature_unfold)
         self.cell_decode = bool(cfg.cell_decode)
         self.n_classes = int(cfg.n_classes)
+        self.pos_encode_freqs = int(cfg["pos_encode_freqs"]) if "pos_encode_freqs" in cfg else 0
 
         imnet_in = self.in_dim * (9 if self.feature_unfold else 1)
-        imnet_in += 2  # relative coordinate
+        imnet_in += 2 * (1 + 2 * self.pos_encode_freqs)  # relative coordinate (+ positional enc.)
         if self.cell_decode:
             imnet_in += 2
         self.imnet = _MLP(imnet_in, int(cfg.hidden_dim), int(cfg.num_layers), self.n_classes)
@@ -125,7 +142,7 @@ class LIIFDecoder(nn.Module):
                 rel = coords - q_coord
                 rel[:, :, 0] *= ww
                 rel[:, :, 1] *= hh
-                inp = [q_feat, rel]
+                inp = [q_feat, _posenc(rel, self.pos_encode_freqs)]
                 if self.cell_decode:
                     rel_cell = cell.clone()
                     rel_cell[:, :, 0] *= ww

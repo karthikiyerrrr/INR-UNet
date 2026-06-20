@@ -82,3 +82,34 @@ def test_decoder_is_deterministic():
         a = dec(feat, coords, cell)
         b = dec(feat, coords, cell)
     assert torch.allclose(a, b)
+
+
+def test_pos_encode_freqs_zero_is_noop():
+    # default-off must be byte-identical to a decoder built without the key
+    torch.manual_seed(0)
+    with_key = LIIFDecoder(_cfg(pos_encode_freqs=0), in_dim=4).eval()
+    without_key = LIIFDecoder(_cfg(), in_dim=4).eval()
+    without_key.load_state_dict(with_key.state_dict())  # same shapes => no-op path
+    feat = torch.randn(1, 4, 6, 6)
+    coords = torch.rand(1, 20, 2) * 2 - 1
+    cell = torch.ones(1, 20, 2) / 6
+    assert torch.allclose(with_key(feat, coords, cell), without_key(feat, coords, cell))
+
+
+def test_pos_encode_grows_mlp_input():
+    base = LIIFDecoder(_cfg(feature_unfold=False, cell_decode=False), in_dim=4)
+    enc = LIIFDecoder(
+        _cfg(feature_unfold=False, cell_decode=False, pos_encode_freqs=6), in_dim=4
+    )
+    first_base = base.imnet.net[0].in_features  # in_dim(4) + rel(2) = 6
+    first_enc = enc.imnet.net[0].in_features     # in_dim(4) + rel(2*(1+2*6)=26) = 30
+    assert first_base == 6
+    assert first_enc == 30
+
+
+def test_pos_encode_forward_shape():
+    dec = LIIFDecoder(_cfg(pos_encode_freqs=6), in_dim=4)
+    feat = torch.randn(2, 4, 8, 8)
+    coords = torch.rand(2, 50, 2) * 2 - 1
+    cell = torch.ones(2, 50, 2) / 8
+    assert dec(feat, coords, cell).shape == (2, 50, 1)

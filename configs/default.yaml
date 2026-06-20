@@ -15,6 +15,7 @@ model:
     local_ensemble: true
     feature_unfold: true
     cell_decode: true
+    pos_encode_freqs: 0
 data:
   root: data
   image_size: 256
