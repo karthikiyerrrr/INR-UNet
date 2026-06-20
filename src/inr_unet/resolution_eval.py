@@ -11,7 +11,9 @@ import numpy as np
 import polars as pl
 import torch
 import torch.nn.functional as F
+from omegaconf import OmegaConf
 
+from inr_unet.data import LIIFSegDataset
 from inr_unet.localization import peak_localization
 from inr_unet.models.components.liif import make_coord
 from inr_unet.models.inr_unet import INRUNet
@@ -124,3 +126,33 @@ def make_resolution_panels(inr, base, dataset, indices, sizes, *, device: str = 
         k: (np.asarray(v, dtype="float32") if k == "extent_A" else np.stack(v).astype("float32"))
         for k, v in cols.items()
     }
+
+
+def sweep_input_fov(
+    inr, base, cfg, fov_values, indices,
+    *, match_tol_A: float, min_distance_A: float, threshold: float = 0.5, device: str = "cpu",
+) -> pl.DataFrame:
+    """Axis B: regenerate the tiles at each fixed FOV, decode both models densely at 128², score.
+
+    Overriding ``tile_fov_A_min == tile_fov_A_max == fov`` pins the physical scale; the 128² input
+    grid is unchanged, so this isolates input pixel-size (scale) robustness. A larger FOV may clamp
+    to a scene's render extent (handled inside the render source).
+    """
+    rows: list[dict] = []
+    for fov in fov_values:
+        fcfg = OmegaConf.merge(cfg, {"data": {"synthetic": {
+            "tile_fov_A_min": float(fov), "tile_fov_A_max": float(fov)}}})
+        ds = LIIFSegDataset(fcfg)
+        for name, model in (("inr_unet", inr), ("unet_baseline", base)):
+            per_tile = []
+            for idx in indices:
+                s = ds.source.get(idx)
+                img = s.image[None, None].to(device)
+                hm = decode_dense(model, img, 128)
+                per_tile.append(score_tile(
+                    hm, s.positions_A, s.valid_extent_A,
+                    match_tol_A=match_tol_A, min_distance_A=min_distance_A, threshold=threshold,
+                ))
+            m = aggregate_localization(per_tile, loss=float("nan"))
+            rows.append(_metric_row(name, {"fov_A": float(fov)}, m))
+    return pl.DataFrame(rows)

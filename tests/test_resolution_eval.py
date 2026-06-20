@@ -112,3 +112,21 @@ def test_make_resolution_panels_shapes():
     assert panels["extent_A"].shape == (2,)
     assert panels["inr_64"].shape == (2, 64, 64)
     assert panels["base_128"].shape == (2, 128, 128)
+
+
+def test_sweep_input_fov_frame():
+    from inr_unet.resolution_eval import sweep_input_fov
+
+    cfg = _small_cfg()
+    inr = build_model(cfg)
+    base_cfg = _small_cfg()
+    base_cfg.model.name = "unet_baseline"
+    base = build_model(base_cfg)
+    fovs = [12.0, 24.0]
+    df = sweep_input_fov(inr, base, cfg, fovs, [0, 1],
+                         match_tol_A=0.3, min_distance_A=0.3)
+    assert set(df["model"].unique()) == {"inr_unet", "unet_baseline"}
+    assert sorted(df["fov_A"].unique()) == fovs
+    assert df.height == 2 * len(fovs)
+    assert (df["n_tiles"] == 2).all()
+    assert "mean_offset_A" in df.columns
