@@ -97,3 +97,21 @@ def test_evaluate_baseline_all_background():
     assert m.n_tiles == 2
     assert m.micro_precision in (0.0, 1.0)
     assert math.isnan(m.mean_offset_A)
+
+
+def test_aggregate_localization_matches_inline():
+    from inr_unet.train import aggregate_localization
+    per_tile = [
+        {"precision": 1.0, "recall": 0.5, "f1": 0.6667, "mean_offset_A": 0.1,
+         "n_pred": 1, "n_gt": 2, "n_matched": 1},
+        {"precision": 0.0, "recall": 0.0, "f1": 0.0, "mean_offset_A": float("nan"),
+         "n_pred": 1, "n_gt": 0, "n_matched": 0},  # empty tile (n_gt == 0)
+    ]
+    m = aggregate_localization(per_tile, loss=0.25)
+    assert m.n_tiles == 2
+    assert m.n_empty == 1
+    assert m.loss == 0.25
+    assert abs(m.precision - 0.5) < 1e-6          # macro mean of [1.0, 0.0]
+    assert abs(m.micro_precision - 0.5) < 1e-6    # 1 matched / 2 pred
+    assert abs(m.micro_recall - 0.5) < 1e-6       # 1 matched / 2 gt
+    assert abs(m.mean_offset_A - 0.1) < 1e-6      # only the non-empty tile contributes

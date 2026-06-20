@@ -262,6 +262,30 @@ class EvalMetrics:
     n_empty: int             # tiles with n_gt == 0
 
 
+def aggregate_localization(per_tile: list[dict], loss: float) -> EvalMetrics:
+    """Aggregate per-tile peak_localization dicts into EvalMetrics (macro + micro + offsets)."""
+    micro_pred = sum(m["n_pred"] for m in per_tile)
+    micro_gt = sum(m["n_gt"] for m in per_tile)
+    micro_match = sum(m["n_matched"] for m in per_tile)
+    n_empty = sum(1 for m in per_tile if m["n_gt"] == 0)
+    offsets = [
+        m["mean_offset_A"] for m in per_tile
+        if m["n_gt"] > 0 and not math.isnan(m["mean_offset_A"])
+    ]
+    return EvalMetrics(
+        loss=loss,
+        precision=float(np.mean([m["precision"] for m in per_tile])) if per_tile else 0.0,
+        recall=float(np.mean([m["recall"] for m in per_tile])) if per_tile else 0.0,
+        f1=float(np.mean([m["f1"] for m in per_tile])) if per_tile else 0.0,
+        mean_offset_A=float(np.mean(offsets)) if offsets else float("nan"),
+        median_offset_A=float(np.median(offsets)) if offsets else float("nan"),
+        micro_precision=micro_match / micro_pred if micro_pred else 0.0,
+        micro_recall=micro_match / micro_gt if micro_gt else float("nan"),
+        n_tiles=len(per_tile),
+        n_empty=n_empty,
+    )
+
+
 def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str,
              *, path: TrainPath | None = None) -> EvalMetrics:
     """Run each eval tile through ``path.eval_tile`` (per-model val loss + dense heatmap), score
@@ -283,9 +307,6 @@ def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str,
     loss_fn = make_loss(cfg)
     total_loss, n = 0.0, 0
     per_tile: list[dict] = []
-    micro_pred = micro_gt = micro_match = 0
-    offsets: list[float] = []
-    n_empty = 0
     with torch.no_grad():
         for idx in indices:
             s = dataset.source.get(idx)
@@ -299,31 +320,8 @@ def evaluate(model, dataset, indices: list[int], cfg: DictConfig, device: str,
                 match_tol_px=float(ec.match_tol_px),
             )
             per_tile.append(m)
-            micro_pred += m["n_pred"]
-            micro_gt += m["n_gt"]
-            micro_match += m["n_matched"]
-            if m["n_gt"] == 0:
-                n_empty += 1
-            elif not math.isnan(m["mean_offset_A"]):
-                offsets.append(m["mean_offset_A"])
 
-    macro_p = float(np.mean([m["precision"] for m in per_tile]))
-    macro_r = float(np.mean([m["recall"] for m in per_tile]))
-    macro_f1 = float(np.mean([m["f1"] for m in per_tile]))
-    return EvalMetrics(
-        loss=total_loss / max(1, n),
-        precision=macro_p,
-        recall=macro_r,
-        f1=macro_f1,
-        mean_offset_A=float(np.mean(offsets)) if offsets else float("nan"),
-        median_offset_A=float(np.median(offsets)) if offsets else float("nan"),
-        micro_precision=micro_match / micro_pred if micro_pred else 0.0,
-        # NaN, not 1.0: micro_gt == 0 means the whole eval set had no atoms (degenerate config),
-        # which is undefined recall rather than perfect recall.
-        micro_recall=micro_match / micro_gt if micro_gt else float("nan"),
-        n_tiles=len(per_tile),
-        n_empty=n_empty,
-    )
+    return aggregate_localization(per_tile, loss=total_loss / max(1, n))
 
 
 def _mmss(seconds: float) -> str:
