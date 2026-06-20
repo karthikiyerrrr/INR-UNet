@@ -1,10 +1,11 @@
 """Contract tests for eval-time LIIF probes."""
 
+import numpy as np
 import torch
 from omegaconf import OmegaConf
 
 from inr_unet.models.inr_unet import INRUNet
-from inr_unet.probe import dense_heatmap
+from inr_unet.probe import dense_heatmap, probe_sweep
 
 
 def _model():
@@ -59,3 +60,66 @@ def test_dense_heatmap_cell_scale_changes_output():
         base = dense_heatmap(model, img, cell_scale=1.0)
         scaled = dense_heatmap(model, img, cell_scale=2.0)
     assert not torch.allclose(base, scaled)
+
+
+class _Sample:
+    def __init__(self, image, positions_A, input_pixel_size_A):
+        self.image = image
+        self.positions_A = positions_A
+        self.input_pixel_size_A = input_pixel_size_A
+
+
+class _Source:
+    def __init__(self, samples):
+        self._samples = samples
+
+    def get(self, idx):
+        return self._samples[idx]
+
+
+class _Dataset:
+    def __init__(self, samples):
+        self.source = _Source(samples)
+
+
+def _toy_dataset(n=2, size=16):
+    rng = np.random.default_rng(0)
+    samples = []
+    for _ in range(n):
+        img = torch.from_numpy(rng.standard_normal((size, size)).astype("float32"))
+        pos = torch.tensor([[4.0, 4.0], [9.0, 9.0]])  # Angstroms, in-FOV at px=1.0
+        samples.append(_Sample(img, pos, 1.0))
+    return _Dataset(samples)
+
+
+def test_probe_sweep_one_row_per_config_with_expected_keys():
+    model = _model()
+    ds = _toy_dataset()
+    configs = [
+        {"cell_scale": 1.0, "local_ensemble": None, "label": "native"},
+        {"cell_scale": 1.0, "local_ensemble": False, "label": "no_ensemble"},
+        {"cell_scale": 2.0, "local_ensemble": None, "label": "cell2x"},
+    ]
+    rows = probe_sweep(model, ds, [0, 1], configs)
+    assert [r["label"] for r in rows] == ["native", "no_ensemble", "cell2x"]
+    for r in rows:
+        assert set(r) >= {
+            "label",
+            "cell_scale",
+            "local_ensemble",
+            "median_offset_A",
+            "median_fwhm",
+            "median_height",
+            "median_floor",
+            "f1",
+        }
+
+
+def test_probe_sweep_is_deterministic():
+    model = _model()
+    ds = _toy_dataset()
+    configs = [{"cell_scale": 1.0, "local_ensemble": None, "label": "native"}]
+    a = probe_sweep(model, ds, [0, 1], configs)
+    b = probe_sweep(model, ds, [0, 1], configs)
+    assert a[0]["f1"] == b[0]["f1"]
+    assert a[0]["median_height"] == b[0]["median_height"]
