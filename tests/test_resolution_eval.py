@@ -74,3 +74,41 @@ def test_score_tile_physical_tolerance_invariant_across_resolution():
     for n in (64, 128, 256):
         assert res[n]["n_matched"] == 1
         assert res[n]["f1"] == 1.0
+
+
+def test_sweep_output_resolution_frame():
+    from inr_unet.data import LIIFSegDataset
+    from inr_unet.resolution_eval import sweep_output_resolution
+
+    cfg = _small_cfg()
+    ds = LIIFSegDataset(cfg)
+    inr = build_model(cfg)
+    base_cfg = _small_cfg()
+    base_cfg.model.name = "unet_baseline"
+    base = build_model(base_cfg)
+    sizes = [64, 128]
+    df = sweep_output_resolution(inr, base, ds, [0, 1], sizes,
+                                 match_tol_A=0.3, min_distance_A=0.3)
+    assert set(df["model"].unique()) == {"inr_unet", "unet_baseline"}
+    assert sorted(df["output_size"].unique()) == sizes
+    assert df.height == 2 * len(sizes)  # 2 models × 2 sizes
+    for col in ("f1", "precision", "recall", "micro_precision", "n_tiles", "n_empty"):
+        assert col in df.columns
+    assert (df["n_tiles"] == 2).all()
+
+
+def test_make_resolution_panels_shapes():
+    from inr_unet.data import LIIFSegDataset
+    from inr_unet.resolution_eval import make_resolution_panels
+
+    cfg = _small_cfg()
+    ds = LIIFSegDataset(cfg)
+    inr = build_model(cfg)
+    base_cfg = _small_cfg()
+    base_cfg.model.name = "unet_baseline"
+    base = build_model(base_cfg)
+    panels = make_resolution_panels(inr, base, ds, [0, 1], [64, 128])
+    assert panels["input"].shape == (2, 128, 128)
+    assert panels["extent_A"].shape == (2,)
+    assert panels["inr_64"].shape == (2, 64, 64)
+    assert panels["base_128"].shape == (2, 128, 128)
