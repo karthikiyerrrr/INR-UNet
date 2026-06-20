@@ -93,7 +93,7 @@ def test_pos_encode_freqs_zero_is_noop():
     feat = torch.randn(1, 4, 6, 6)
     coords = torch.rand(1, 20, 2) * 2 - 1
     cell = torch.ones(1, 20, 2) / 6
-    assert torch.allclose(with_key(feat, coords, cell), without_key(feat, coords, cell))
+    assert torch.equal(with_key(feat, coords, cell), without_key(feat, coords, cell))
 
 
 def test_pos_encode_grows_mlp_input():
