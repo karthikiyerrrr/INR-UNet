@@ -112,6 +112,41 @@ def test_aggregate_localization_matches_inline():
     assert m.n_empty == 1
     assert m.loss == 0.25
     assert abs(m.precision - 0.5) < 1e-6          # macro mean of [1.0, 0.0]
+    assert abs(m.recall - 0.25) < 1e-6            # macro mean of [0.5, 0.0]
+    assert abs(m.f1 - 0.33335) < 1e-4             # macro mean of [0.6667, 0.0]
     assert abs(m.micro_precision - 0.5) < 1e-6    # 1 matched / 2 pred
     assert abs(m.micro_recall - 0.5) < 1e-6       # 1 matched / 2 gt
     assert abs(m.mean_offset_A - 0.1) < 1e-6      # only the non-empty tile contributes
+    assert abs(m.median_offset_A - 0.1) < 1e-6    # only the non-empty tile contributes
+
+
+def test_aggregate_localization_filters_nonempty_nan_offset():
+    from inr_unet.train import aggregate_localization
+
+    per_tile = [
+        {
+            "precision": 0.5,
+            "recall": 1.0,
+            "f1": 0.667,
+            "mean_offset_A": float("nan"),
+            "n_pred": 2,
+            "n_gt": 2,
+            "n_matched": 1,
+        },  # non-empty tile with no offset
+        {
+            "precision": 0.5,
+            "recall": 0.5,
+            "f1": 0.5,
+            "mean_offset_A": 0.2,
+            "n_pred": 2,
+            "n_gt": 2,
+            "n_matched": 1,
+        },  # normal tile with real offset
+    ]
+    m = aggregate_localization(per_tile, loss=0.5)
+    assert m.n_tiles == 2
+    assert m.n_empty == 0  # both tiles have n_gt > 0
+    # only the tile with valid offset contributes
+    assert abs(m.mean_offset_A - 0.2) < 1e-6
+    # only the tile with valid offset contributes
+    assert abs(m.median_offset_A - 0.2) < 1e-6

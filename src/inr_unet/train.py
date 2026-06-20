@@ -263,7 +263,21 @@ class EvalMetrics:
 
 
 def aggregate_localization(per_tile: list[dict], loss: float) -> EvalMetrics:
-    """Aggregate per-tile peak_localization dicts into EvalMetrics (macro + micro + offsets)."""
+    """Aggregate per-tile peak_localization dicts into EvalMetrics (macro + micro + offsets).
+
+    Macro metrics (precision, recall, f1) are computed as the mean across all tiles.
+    Micro metrics (micro_precision, micro_recall) are pooled: matched / total predictions and
+    matched / total ground-truth atoms across all tiles. Micro_recall is NaN if no ground-truth
+    atoms exist across all tiles.
+
+    Offset metrics (mean_offset_A, median_offset_A) are computed only over tiles with n_gt > 0
+    that have a finite (non-NaN) mean_offset_A. A tile with n_gt > 0 but no matches yields NaN
+    and is excluded; a completely empty tile (n_gt == 0) also contributes nothing. If no tiles
+    contribute a valid offset, both offset fields are NaN.
+
+    An intentionally empty per_tile list returns 0.0 for all macro metrics and NaN for offsets—
+    a clean degenerate case that avoids numpy warnings when computing mean([]).
+    """
     micro_pred = sum(m["n_pred"] for m in per_tile)
     micro_gt = sum(m["n_gt"] for m in per_tile)
     micro_match = sum(m["n_matched"] for m in per_tile)
