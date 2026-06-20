@@ -41,6 +41,11 @@ _VAL_PANELS = "val_panels.npz"
 _TEST_METRICS = "test_metrics.json"
 _TRAIN_REQUIRED = (_META, _CONFIG, _HISTORY)
 
+_OUTPUT_SWEEP = "output_sweep.parquet"
+_FOV_SWEEP = "fov_sweep.parquet"
+_PANELS = "panels.npz"
+_RESOLUTION_REQUIRED = (_META, _CONFIG, _OUTPUT_SWEEP, _FOV_SWEEP)
+
 
 @dataclass(frozen=True)
 class RunArtifacts:
@@ -187,7 +192,60 @@ def load_training_run(run_dir: str | Path) -> TrainingRunArtifacts:
     )
 
 
+@dataclass(frozen=True)
+class ResolutionSweepArtifacts:
+    """One cross-resolution comparison bundle: both sweep frames, config, and optional panels."""
+
+    run_dir: Path
+    meta: dict
+    config: DictConfig
+    output_sweep: pl.DataFrame
+    fov_sweep: pl.DataFrame
+    panels: dict[str, np.ndarray]
+
+
+def save_resolution_sweep(
+    run_dir: str | Path,
+    *,
+    meta: dict,
+    config: DictConfig,
+    output_sweep: pl.DataFrame,
+    fov_sweep: pl.DataFrame,
+    panels: dict[str, np.ndarray] | None = None,
+) -> Path:
+    """Write a resolution-sweep bundle to ``run_dir`` (updates in place)."""
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / _META).write_text(json.dumps(meta, indent=2, sort_keys=True))
+    OmegaConf.save(config, run_dir / _CONFIG)
+    output_sweep.write_parquet(run_dir / _OUTPUT_SWEEP)
+    fov_sweep.write_parquet(run_dir / _FOV_SWEEP)
+    if panels:
+        np.savez(run_dir / _PANELS, **{k: np.asarray(v) for k, v in panels.items()})
+    return run_dir
+
+
+def load_resolution_sweep(run_dir: str | Path) -> ResolutionSweepArtifacts:
+    """Load a resolution-sweep bundle written by :func:`save_resolution_sweep`."""
+    run_dir = Path(run_dir)
+    for name in _RESOLUTION_REQUIRED:
+        if not (run_dir / name).exists():
+            raise FileNotFoundError(f"resolution run {run_dir} is missing artifact {name}")
+    meta = json.loads((run_dir / _META).read_text())
+    config = OmegaConf.load(run_dir / _CONFIG)
+    output_sweep = pl.read_parquet(run_dir / _OUTPUT_SWEEP)
+    fov_sweep = pl.read_parquet(run_dir / _FOV_SWEEP)
+    panels: dict[str, np.ndarray] = {}
+    if (run_dir / _PANELS).exists():
+        with np.load(run_dir / _PANELS) as npz:
+            panels = {k: npz[k] for k in npz.files}
+    return ResolutionSweepArtifacts(run_dir, meta, config, output_sweep, fov_sweep, panels)
+
+
 def run_kind(run_dir: str | Path) -> str:
-    """Classify a run bundle by ``meta['purpose']``: 'training' vs 'overfit' (default)."""
+    """Classify a run bundle by ``meta['purpose']``: 'training', 'resolution', else 'overfit'."""
     meta = json.loads((Path(run_dir) / _META).read_text())
-    return "training" if meta.get("purpose") == "training" else "overfit"
+    purpose = meta.get("purpose")
+    if purpose in ("training", "resolution"):
+        return purpose
+    return "overfit"
