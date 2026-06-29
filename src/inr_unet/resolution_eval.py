@@ -85,11 +85,13 @@ def _metric_row(model_name: str, axis: dict, m) -> dict:
 def sweep_output_resolution(
     inr, base, dataset, indices, sizes,
     *, match_tol_A: float, min_distance_A: float, threshold: float = 0.5, device: str = "cpu",
+    verbose: bool = False,
 ) -> pl.DataFrame:
     """Axis A: fixed 128² input per tile, decode each model at every grid in ``sizes`` and score.
 
     The baseline is decoded natively then bilinear-resized inside ``decode_dense``. Localization
     uses each tile's own ``valid_extent_A`` so the Å offset is physical and comparable across N.
+    ``verbose`` prints a per-(model, size) heartbeat (off by default so tests/marimo stay quiet).
     """
     rows: list[dict] = []
     for name, model in (("inr_unet", inr), ("unet_baseline", base)):
@@ -105,6 +107,9 @@ def sweep_output_resolution(
                 ))
             m = aggregate_localization(per_tile, loss=float("nan"))
             rows.append(_metric_row(name, {"output_size": int(n)}, m))
+            if verbose:
+                print(f"[axis A] {name:13} {n:>3}px  f1={m.f1:.3f}  "
+                      f"off={m.mean_offset_A * 100:.1f}pm", flush=True)
     return pl.DataFrame(rows)
 
 
@@ -131,12 +136,14 @@ def make_resolution_panels(inr, base, dataset, indices, sizes, *, device: str = 
 def sweep_input_fov(
     inr, base, cfg, fov_values, indices,
     *, match_tol_A: float, min_distance_A: float, threshold: float = 0.5, device: str = "cpu",
+    verbose: bool = False,
 ) -> pl.DataFrame:
     """Axis B: regenerate the tiles at each fixed FOV, decode both models densely at 128², score.
 
     Overriding ``tile_fov_A_min == tile_fov_A_max == fov`` pins the physical scale; the 128² input
     grid is unchanged, so this isolates input pixel-size (scale) robustness. A larger FOV may clamp
-    to a scene's render extent (handled inside the render source).
+    to a scene's render extent (handled inside the render source). ``verbose`` prints a
+    per-(fov, model) heartbeat (off by default so tests/marimo stay quiet).
     """
     rows: list[dict] = []
     for fov in fov_values:
@@ -155,4 +162,7 @@ def sweep_input_fov(
                 ))
             m = aggregate_localization(per_tile, loss=float("nan"))
             rows.append(_metric_row(name, {"fov_A": float(fov)}, m))
+            if verbose:
+                print(f"[axis B] fov={fov:>4.0f}A  {name:13} f1={m.f1:.3f}  "
+                      f"off={m.mean_offset_A * 100:.1f}pm", flush=True)
     return pl.DataFrame(rows)
