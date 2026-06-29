@@ -89,7 +89,6 @@ def _(PALETTE, load_training_run, mo, run_picker):
     colors = {labels[a.meta["run_id"]]: PALETTE[i % len(PALETTE)] for i, a in enumerate(arts)}
 
     mo.md("Comparing **" + str(len(arts)) + "** run(s): " + ", ".join(f"`{labels[a.meta['run_id']]}`" for a in arts))
-
     return arts, colors, labels
 
 
@@ -115,7 +114,6 @@ def _(arts, labels, mo, pl):
 
     summary = pl.DataFrame([_summary_row(_a) for _a in arts])
     mo.vstack([mo.md("### Runs at a glance"), mo.ui.table(summary, selection=None, pagination=False)])
-
     return
 
 
@@ -171,7 +169,6 @@ def _(arts, colors, go, labels, make_subplots, mo, pl):
             "uses `val_f1`, which is.*"
         ),
     ])
-
     return
 
 
@@ -227,77 +224,14 @@ def _(arts, colors, labels, mo, pl, px):
         mo.hstack([_rate_bar, _off_bar], justify="start", gap=1),
         mo.ui.table(pl.DataFrame(_tbl), selection=None, pagination=False),
     ])
-
     return
 
 
 @app.cell(hide_code=True)
 def hm_helpers():
     import numpy as np
-    from scipy.ndimage import maximum_filter
 
-    # Stage 0 — heatmap diff. Pixel-space peak metrics on the shared val_panels (same val tiles,
-    # same gt across both runs). These helpers are module-global (no leading underscore) so the
-    # compute cell below can call them; per-tile loop temporaries elsewhere stay underscore-local.
-    HM_THR = 0.3        # gt fraction-of-max to count as a peak
-    HM_MIN_DIST = 2     # px; local-maximum neighborhood radius
-    HM_FWHM_RAD = 4     # px; window radius for half-max-area FWHM
-    HM_FLOOR_RAD = 3    # px; peak-exclusion radius for the off-peak floor
-
-
-    def gt_peaks(gt, thr=HM_THR, min_dist=HM_MIN_DIST):
-        """(row, col) integer peak locations = local maxima of the shared gt heatmap."""
-        mx = maximum_filter(gt, size=2 * int(min_dist) + 1)
-        rs, cs = np.where((gt == mx) & (gt >= thr * float(gt.max() or 1.0)))
-        return list(zip(rs.tolist(), cs.tolist()))
-
-
-    def subpixel_offset(field, r, c):
-        """Parabolic sub-pixel vertex offset (dx, dy) of ``field`` around integer peak (r, c)."""
-        def axis(lo, mid, hi):
-            denom = lo - 2.0 * mid + hi
-            if denom == 0:
-                return 0.0
-            return float(np.clip(0.5 * (lo - hi) / denom, -0.5, 0.5))
-
-        h, w = field.shape
-        dy = axis(field[max(0, r - 1), c], field[r, c], field[min(h - 1, r + 1), c])
-        dx = axis(field[r, max(0, c - 1)], field[r, c], field[r, min(w - 1, c + 1)])
-        return dx, dy
-
-
-    def peak_fwhm(pred, r, c, rad=HM_FWHM_RAD):
-        """Effective FWHM diameter (px) from the half-max area in a window around (r, c)."""
-        peak = float(pred[r, c])
-        if peak <= 0:
-            return float("nan")
-        win = pred[max(0, r - rad):r + rad + 1, max(0, c - rad):c + rad + 1]
-        area = float((win >= 0.5 * peak).sum())
-        return 2.0 * float(np.sqrt(area / np.pi))
-
-
-    def off_peak_floor(pred, peaks, rad=HM_FLOOR_RAD):
-        """Mean prediction away from every peak (a proxy for the false-positive floor)."""
-        mask = np.ones(pred.shape, dtype=bool)
-        for r, c in peaks:
-            mask[max(0, r - rad):r + rad + 1, max(0, c - rad):c + rad + 1] = False
-        return float(pred[mask].mean()) if mask.any() else float("nan")
-
-
-    def collect_peak_stats(preds, peaks_per_tile, gts):
-        """Pool per-peak offset/height/fwhm and per-tile floor over a run's val panels."""
-        off, ht, fw, fl = [], [], [], []
-        for pred, peaks, gt in zip(preds, peaks_per_tile, gts):
-            for (r, c) in peaks:
-                dxg, dyg = subpixel_offset(gt, r, c)
-                dxp, dyp = subpixel_offset(pred, r, c)
-                off.append(float(np.hypot(dxp - dxg, dyp - dyg)))
-                ht.append(float(pred[r, c]))
-                fw.append(peak_fwhm(pred, r, c))
-            fl.append(off_peak_floor(pred, peaks))
-        return {"offset": np.array(off), "height": np.array(ht),
-                "fwhm": np.array(fw), "floor": np.array(fl)}
-
+    from inr_unet.peak_stats import collect_peak_stats, gt_peaks
 
     return collect_peak_stats, gt_peaks, np
 
@@ -333,7 +267,6 @@ def hm_compute(arts, collect_peak_stats, gt_peaks, labels, mo, np):
           "not stored in `val_panels`, so offsets are in **pixels** (both runs share the tile grid, so "
           "this is the exact comparison; the pm figures in the handoff come from eval)."
     )
-
     return (stats,)
 
 
@@ -342,7 +275,6 @@ def hm_slider(arts, mo):
     mo.stop(len(arts) != 2, mo.md("_The heatmap gallery needs exactly two selected runs._"))
     tile_sel = mo.ui.slider(0, len(arts[0].val_panels["gt"]) - 1, value=0, label="val tile")
     tile_sel
-
     return (tile_sel,)
 
 
@@ -374,7 +306,6 @@ def hm_gallery(arts, labels, mo, px, tile_sel):
         _hm(_p1, f"pred · {_l1}"),
         _hm(_diff, f"{_l1} − {_l0}", cmap="RdBu", zmid=0.0),
     ], justify="start", gap=0.5)
-
     return
 
 
@@ -397,7 +328,6 @@ def hm_dist(colors, go, make_subplots, mo, np, stats):
                        margin=dict(l=8, r=8, t=40, b=8),
                        title="Per-peak heatmap statistics (pooled over val tiles)")
     mo.vstack([mo.md("#### Per-peak distributions"), _fig])
-
     return
 
 
